@@ -1,20 +1,18 @@
 ﻿import torch
-from transformers import AutoModel, AutoProcessor
+from transformers import AutoModel, AutoProcessor, PreTrainedModel
 from PIL import Image
-from typing import List, Optional, Union
+from typing import List, Optional, Union, cast, Any
 import math
 import logging
 import time
 
-# Import configuration constants
 from config import DEVICE, TRUST_REMOTE_CODE
 
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
+logger = logging.getLogger(__name__)
 
 class Vectorizer:
     """
-    Handles loading the embedding model and vectorizing images and text.
-    Uses models via the transformers library.
+    Maneja la carga del modelo de embedding y la vectorización de imágenes y texto.
     """
 
     def __init__(
@@ -23,49 +21,58 @@ class Vectorizer:
         device: str = DEVICE,
         trust_remote_code: bool = TRUST_REMOTE_CODE,
     ):
-        """
-        Initializes the Vectorizer and loads the model and processor.
-        """
         self.model_name = model_name
-        self.device = device
+        if device == 'cuda' and not torch.cuda.is_available():
+            logger.warning("CUDA specified but not available. Falling back to CPU.")
+            self.device = 'cpu'
+        else:
+            self.device = device
         self.trust_remote_code = trust_remote_code
-        self.model = None
-        self.processor = None
+        self.model: Optional[PreTrainedModel] = None
+        self.processor: Optional[Any] = None # Usar Any para evitar error de importación
 
-        logging.info(f"Initializing Vectorizer with model: {self.model_name} on device: {self.device}")
+        logger.info(f"Initializing Vectorizer with model: {self.model_name} on device: {self.device}")
         self._load_model()
 
     def _load_model(self):
-        """Loads the model and processor from Hugging Face."""
-        try:
-            logging.info(f"Loading model '{self.model_name}'...")
-            # Usar AutoModel y AutoProcessor es común para modelos CLIP
-            self.model = AutoModel.from_pretrained(
-                self.model_name, trust_remote_code=self.trust_remote_code
-            ).to(self.device)
+        if self.model is not None and self.processor is not None:
+            logger.info("Model and processor already loaded.")
+            return
 
-            logging.info(f"Loading processor for '{self.model_name}'...")
+        try:
+            logger.info(f"Loading model '{self.model_name}'...")
+            start_time = time.time()
+            model = AutoModel.from_pretrained(
+                self.model_name, trust_remote_code=self.trust_remote_code
+            )
+            self.model = model.to(self.device)
+            self.model.eval()
+            end_time = time.time()
+            logger.info(f"Model loaded successfully to {self.device} in {end_time - start_time:.2f}s.")
+
+            logger.info(f"Loading processor for '{self.model_name}'...")
+            start_time = time.time()
             self.processor = AutoProcessor.from_pretrained(
                 self.model_name, trust_remote_code=self.trust_remote_code
             )
+            end_time = time.time()
+            logger.info(f"Processor loaded successfully in {end_time - start_time:.2f}s.")
 
-            self.model.eval() # Poner el modelo en modo evaluación
-            logging.info("Model and processor loaded successfully.")
-
-        # Capturar errores más específicos si es posible/necesario
-        # except RepositoryNotFoundError:
-        #     logging.error(f"Model '{self.model_name}' not found on Hugging Face Hub.")
-        #     raise
-        # except ConnectionError:
-        #     logging.error(f"Connection error downloading '{self.model_name}'. Check internet.")
-        #     raise
-        except ImportError as e:
-             logging.error(f"Import error during model loading. Missing dependencies? {e}", exc_info=True)
+        except OSError as e:
+             logger.error(f"OSError loading model/processor '{self.model_name}': {e}.")
+             self.model = None
+             self.processor = None
              raise
-        except Exception as e: # Captura general final
-            logging.error(f"Error loading model or processor '{self.model_name}': {e}", exc_info=True)
-            logging.error("Check model name, internet access (first time), dependencies, and permissions.")
-            raise # Re-lanzar para indicar fallo crítico
+        except ImportError as e:
+             logger.error(f"ImportError during model loading: {e}. Missing dependencies?", exc_info=True)
+             self.model = None
+             self.processor = None
+             raise
+        except Exception as e:
+            logger.error(f"Unexpected error loading model or processor '{self.model_name}': {e}", exc_info=True)
+            self.model = None
+            self.processor = None
+            raise
 
     def _process_batch(
         self,
@@ -73,87 +80,87 @@ class Vectorizer:
         batch_type: str,
         batch_size: int,
         truncate_dim: Optional[int],
-        is_query: bool = False # Añadido por si el modelo diferencia query/document
+        is_query: bool = False # No usado actualmente en la lógica interna de CLIP
     ) -> List[Optional[List[float]]]:
-        """
-        Helper function to process data in batches. Handles potential errors within a batch.
-        Returns a list of embeddings or None for failed items, maintaining original batch order.
-        """
+        """Procesa datos (imágenes o texto) en lotes."""
         all_embeddings: List[Optional[List[float]]] = []
         num_items_in_batch_data = len(batch_data)
-        num_batches = math.ceil(num_items_in_batch_data / batch_size)
+        num_sub_batches = math.ceil(num_items_in_batch_data / batch_size)
 
         if not self.model or not self.processor:
-             logging.error("Model or processor not loaded. Cannot process batch.")
-             # Devolver Nones para toda la entrada original
+             logger.error("Model or processor not loaded. Cannot process batch.")
              return [None] * num_items_in_batch_data
 
-        for i in range(num_batches):
+        model = cast(PreTrainedModel, self.model)
+        processor = self.processor
+        if not processor:
+            logger.error("Processor object is None in _process_batch.")
+            return [None] * num_items_in_batch_data
+
+        for i in range(num_sub_batches):
             start_idx = i * batch_size
             end_idx = min(start_idx + batch_size, num_items_in_batch_data)
-            batch = batch_data[start_idx:end_idx]
-            batch_indices = list(range(start_idx, end_idx)) # Para logging de errores
+            current_sub_batch = batch_data[start_idx:end_idx]
+            sub_batch_len = len(current_sub_batch)
 
-            if not batch:
+            if not current_sub_batch:
                 continue
 
-            # Inicializar resultados para este lote con None
-            batch_results: List[Optional[List[float]]] = [None] * len(batch)
+            sub_batch_results: List[Optional[List[float]]] = [None] * sub_batch_len
 
             try:
-                with torch.no_grad(): # Desactivar gradientes para inferencia
+                with torch.no_grad():
                     if batch_type == "image":
-                        inputs = self.processor(images=batch, return_tensors="pt").to(self.device)
-                        # La función puede variar: get_image_features, encode_image, etc.
-                        embeddings_tensor = self.model.get_image_features(**inputs)
+                        if not all(isinstance(item, Image.Image) for item in current_sub_batch):
+                             raise TypeError("Input must be a list of PIL Images.")
+                        inputs = processor(images=current_sub_batch, return_tensors="pt", padding=True).to(self.device)
+                        # Asume modelo tipo CLIP. Para otros, la llamada puede variar.
+                        embeddings_tensor = model.get_image_features(**inputs)
                     elif batch_type == "text":
-                        # Algunos modelos usan prefijos (ej. Jina V2)
-                        # texts_with_prefix = [f"query: {t}" if is_query else f"document: {t}" for t in batch] # Ejemplo
-                        inputs = self.processor(
-                            text=batch, # O texts_with_prefix si aplica
-                            return_tensors="pt",
-                            padding=True,
-                            truncation=True,
-                        ).to(self.device)
-                        embeddings_tensor = self.model.get_text_features(**inputs)
+                         if not all(isinstance(item, str) for item in current_sub_batch):
+                             raise TypeError("Input must be a list of strings.")
+                         inputs = processor(
+                             text=current_sub_batch, return_tensors="pt", padding=True, truncation=True, max_length=77
+                         ).to(self.device)
+                         # Asume modelo tipo CLIP. Para otros (ej. Sentence Transformers), usar model.encode(...)
+                         embeddings_tensor = model.get_text_features(**inputs)
                     else:
-                        # Esto es un error de programación, debería lanzar excepción
-                        raise ValueError(f"Invalid batch_type specified: {batch_type}")
+                        raise ValueError(f"Invalid batch_type: {batch_type}")
 
-                    # Normalizar embeddings (práctica común para similitud coseno)
-                    embeddings_tensor = embeddings_tensor / embeddings_tensor.norm(p=2, dim=-1, keepdim=True)
+                    # 1. Normalizar embeddings originales
+                    embeddings_tensor = torch.nn.functional.normalize(embeddings_tensor, p=2, dim=-1)
 
-                    # Truncamiento opcional
+                    # 2. Truncar si se especifica
+                    was_truncated = False
                     if truncate_dim and embeddings_tensor.shape[-1] > truncate_dim:
                         embeddings_tensor = embeddings_tensor[:, :truncate_dim]
-                        # Considerar re-normalizar si es necesario después de truncar
-                        # embeddings_tensor = embeddings_tensor / embeddings_tensor.norm(p=2, dim=-1, keepdim=True)
+                        logger.debug(f"Embeddings truncated to dimension {truncate_dim}")
+                        was_truncated = True
 
-                    # Convertir a lista de listas (numpy primero)
+                    # 3. Re-normalizar DESPUÉS del truncamiento (si se truncó)
+                    #    Esto mantiene los vectores unitarios, importante para distancia coseno.
+                    if was_truncated:
+                         embeddings_tensor = torch.nn.functional.normalize(embeddings_tensor, p=2, dim=-1)
+                         logger.debug("Re-normalized embeddings after truncation.")
+
                     valid_embeddings_list = embeddings_tensor.cpu().numpy().tolist()
 
-                    # Verificar si la salida coincide con la entrada del lote
-                    if len(valid_embeddings_list) == len(batch):
-                        batch_results = valid_embeddings_list # Todos OK
+                    if len(valid_embeddings_list) == sub_batch_len:
+                        sub_batch_results = valid_embeddings_list
                     else:
-                        # Error inesperado: el modelo no devolvió un embedding por cada entrada
-                        logging.error(f"Batch {i+1}: Output size ({len(valid_embeddings_list)}) mismatch with input size ({len(batch)}). Marking all as failed.")
-                        # batch_results ya está lleno de None
+                        logger.error(f"Sub-batch {i+1}/{num_sub_batches}: Output size mismatch.")
 
             except Exception as e:
-                # Error durante la vectorización del lote completo
-                logging.error(f"Error vectorizing {batch_type} batch {i+1}/{num_batches}: {e}", exc_info=True)
-                # Marcar todos los ítems de este lote como fallidos (ya son None)
-                # Podrías intentar identificar ítems específicos si el error lo permite
-                # for item_idx_in_batch, original_idx in enumerate(batch_indices):
-                #    logging.error(f"  - Failed item at original index {original_idx}")
-                pass # batch_results ya está como [None, None, ...]
+                logger.error(f"Error vectorizing {batch_type} sub-batch {i+1}/{num_sub_batches}: {e}", exc_info=True)
+                # sub_batch_results ya está lleno de None
 
-            all_embeddings.extend(batch_results)
+            all_embeddings.extend(sub_batch_results)
 
-        # Verificación final de longitud
         if len(all_embeddings) != num_items_in_batch_data:
-             logging.warning(f"Final embeddings list length ({len(all_embeddings)}) mismatch with input data length ({num_items_in_batch_data}).")
+             logger.warning(f"Final embeddings list length mismatch with input data length.")
+             # Rellenar con None si faltan resultados por alguna razón
+             all_embeddings.extend([None] * (num_items_in_batch_data - len(all_embeddings)))
+
 
         return all_embeddings
 
@@ -163,82 +170,73 @@ class Vectorizer:
         batch_size: int,
         truncate_dim: Optional[int] = None,
     ) -> List[Optional[List[float]]]:
-        """
-        Vectorizes a list of PIL Image objects, handling potential errors.
-
-        Args:
-            images: A list of PIL Image objects.
-            batch_size: The number of images to process in each inference batch.
-            truncate_dim: Optional dimension to truncate the embeddings to.
-
-        Returns:
-            A list where each element is either an embedding (list of floats)
-            or None if vectorization failed for that specific image.
-            The list maintains the order of the input images.
-        """
+        """Vectoriza una lista de objetos PIL Image."""
         if not self.model or not self.processor:
-            logging.error("Model/processor not loaded. Cannot vectorize images.")
+            logger.error("Model/processor not loaded. Cannot vectorize images.")
             return [None] * len(images) if images else []
         if not images or not isinstance(images, list):
-            logging.warning("No valid list of images provided to vectorize.")
+            logger.warning("No valid list of images provided. Returning empty list.")
             return []
+        if not all(isinstance(img, Image.Image) for img in images):
+             logger.error("Input list contains non-PIL Image objects.")
+             # Devolver None para cada elemento para mantener la correspondencia de índices
+             return [None] * len(images)
 
-        logging.info(f"Vectorizing {len(images)} images in batches of {batch_size}...")
-        # Medición de tiempo (GPU o CPU)
+
+        num_images = len(images)
+        logger.info(f"Starting image vectorization for {num_images} images with batch size {batch_size}...")
+
         start_time_event = None
         end_time_event = None
+        start_time_cpu = None
         if self.device == 'cuda':
             start_time_event = torch.cuda.Event(enable_timing=True)
             end_time_event = torch.cuda.Event(enable_timing=True)
             start_time_event.record()
         else:
-            start_time = time.time() # Usar time.time() para CPU
+            start_time_cpu = time.time()
 
         embeddings = self._process_batch(images, "image", batch_size, truncate_dim)
 
-        # Finalizar medición de tiempo
+        elapsed_time = 0
         if self.device == 'cuda' and start_time_event and end_time_event:
             end_time_event.record()
-            torch.cuda.synchronize() # Esperar a que terminen las operaciones CUDA
-            elapsed_time = start_time_event.elapsed_time(end_time_event) / 1000.0 # ms a s
-        else:
-            end_time = time.time()
-            elapsed_time = end_time - start_time
+            torch.cuda.synchronize()
+            elapsed_time = start_time_event.elapsed_time(end_time_event) / 1000.0
+        elif start_time_cpu:
+            end_time_cpu = time.time()
+            elapsed_time = end_time_cpu - start_time_cpu
 
         num_successful = sum(1 for emb in embeddings if emb is not None)
-        logging.info(f"Finished vectorizing images in {elapsed_time:.2f}s. Got {num_successful}/{len(images)} successful embeddings.")
+        num_failed = num_images - num_successful
+        logger.info(f"Finished vectorizing images in {elapsed_time:.2f}s. Successful: {num_successful}/{num_images}, Failed: {num_failed}")
+        if num_failed > 0:
+             logger.warning(f"{num_failed} images failed to vectorize.")
+
         return embeddings
+
 
     def vectorize_texts(
         self,
         texts: List[str],
         batch_size: int,
         truncate_dim: Optional[int] = None,
-        is_query: bool = False, # Para modelos que distinguen
+        is_query: bool = False, # Argumento mantenido por compatibilidad, no usado en CLIP interno
     ) -> List[Optional[List[float]]]:
-        """
-        Vectorizes a list of text strings, handling potential errors.
-
-        Args:
-            texts: A list of text strings.
-            batch_size: The number of texts to process in each inference batch.
-            truncate_dim: Optional dimension to truncate the embeddings to.
-            is_query: Flag for models differentiating query/document encoding.
-
-        Returns:
-            A list where each element is either an embedding (list of floats)
-            or None if vectorization failed for that specific text.
-            The list maintains the order of the input texts.
-        """
+        """Vectoriza una lista de strings de texto."""
         if not self.model or not self.processor:
-            logging.error("Model/processor not loaded. Cannot vectorize texts.")
+            logger.error("Model/processor not loaded. Cannot vectorize texts.")
             return [None] * len(texts) if texts else []
         if not texts or not isinstance(texts, list):
-            logging.warning("No valid list of texts provided to vectorize.")
+            logger.warning("No valid list of texts provided. Returning empty list.")
             return []
+        if not all(isinstance(t, str) for t in texts):
+             logger.error("Input list contains non-string objects.")
+             return [None] * len(texts)
 
-        logging.info(f"Vectorizing {len(texts)} texts in batches of {batch_size} (is_query={is_query})...")
-        start_time = time.time() # CPU timing es suficiente para texto normalmente
+        num_texts = len(texts)
+        logger.info(f"Starting text vectorization for {num_texts} texts with batch size {batch_size}...")
+        start_time = time.time()
 
         embeddings = self._process_batch(texts, "text", batch_size, truncate_dim, is_query=is_query)
 
@@ -246,5 +244,9 @@ class Vectorizer:
         elapsed_time = end_time - start_time
 
         num_successful = sum(1 for emb in embeddings if emb is not None)
-        logging.info(f"Finished vectorizing texts in {elapsed_time:.2f}s. Got {num_successful}/{len(texts)} successful embeddings.")
+        num_failed = num_texts - num_successful
+        logger.info(f"Finished vectorizing texts in {elapsed_time:.2f}s. Successful: {num_successful}/{num_texts}, Failed: {num_failed}")
+        if num_failed > 0:
+             logger.warning(f"{num_failed} texts failed to vectorize.")
+
         return embeddings

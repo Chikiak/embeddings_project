@@ -49,3 +49,4 @@ __pyinstaller/
 
 # But do not ignore the directory itself
 !/data/
+.flake8
