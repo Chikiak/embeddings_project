@@ -1,0 +1,51 @@
+﻿# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.venv/
+env/
+/instance
+
+# Transformers/Hugging Face
+/.cache/huggingface/
+
+# Vector Database
+vector_db_store/
+
+# Data
+/images  # Or whatever your image directory is named, if you don't want to track the images themselves
+*.csv # If you generate any CSV files
+*.txt # If you generate any text files
+
+# OS
+.DS_Store
+Thumbs.db
+
+# IDEs and Editors
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# Logs
+*.log
+
+# Distribution / Packaging
+dist/
+build/
+*.egg-info
+__pyinstaller/
+
+# Streamlit
+.streamlit/secrets.toml
+.streamlit/cache
+
+# Temporary files
+*.tmp
+
+# Ignore all files in "data" directory
+/data/*
+
+# But do not ignore the directory itself
+!/data/
