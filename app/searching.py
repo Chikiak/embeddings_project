@@ -16,160 +16,102 @@ from app.exceptions import (
     VectorizerError,
     ImageProcessingError,
 )
-from config import DEFAULT_N_RESULTS
+import config # Necesita config para DEFAULT_N_RESULTS
 
 logger = logging.getLogger(__name__)
 
-# --- Text Search ---
+# --- Función auxiliar para obtener nombre de colección de forma segura ---
+def _get_db_collection_name(db: VectorDBInterface) -> str:
+    return getattr(db, 'collection_name', 'N/A')
+
+# --- Text Search (Modificado para usar db y truncate_dim directamente) ---
 def search_by_text(
     query_text: str,
-    vectorizer: Vectorizer, # Passed as argument
-    db: VectorDBInterface,  # Passed as argument
-    n_results: int = DEFAULT_N_RESULTS,
-    truncate_dim: Optional[int] = None, # Passed as argument
+    vectorizer: Vectorizer,
+    db: VectorDBInterface,  # <-- RECIBE LA INSTANCIA DE BD CORRECTA
+    n_results: int = config.DEFAULT_N_RESULTS,
+    truncate_dim: Optional[int] = None, # <-- RECIBE LA DIMENSIÓN CORRECTA
 ) -> SearchResults:
     """
-    Busca imágenes similares a una consulta de texto dada usando VectorDBInterface.
-
-    Args:
-        query_text: La descripción de texto a buscar.
-        vectorizer: Instancia de Vectorizer inicializada (para el modelo correcto).
-        db: Instancia inicializada que cumple con VectorDBInterface.
-        n_results: El número máximo de resultados a devolver.
-        truncate_dim: Dimensión utilizada para la vectorización (puede ser None).
-
-    Returns:
-        Un objeto SearchResults que contiene los resultados. Devuelve un
-        SearchResults vacío si la búsqueda fue exitosa pero no encontró coincidencias.
-
-    Raises:
-        PipelineError: Si la búsqueda falla (ej: fallo al vectorizar consulta, error de BD).
-        ValueError: Si la entrada query_text es inválida.
+    Busca imágenes similares a una consulta de texto usando la BD y dimensión proporcionadas.
     """
-    logger.info(f"--- Performing Text-to-Image Search for query: '{query_text}' ---")
+    collection_name = _get_db_collection_name(db)
+    effective_dim_str = str(truncate_dim) if truncate_dim else 'Full'
+    logger.info(f"--- Performing Text-to-Image Search on Collection '{collection_name}' ---")
+    logger.info(f"  Query: '{query_text}'")
     logger.info(f"  Using Vectorizer Model: {vectorizer.model_name}")
-    logger.info(f"  Target Embedding Dimension: {truncate_dim or 'Full'}")
+    logger.info(f"  Target Embedding Dimension: {effective_dim_str}")
 
-    if not query_text or not isinstance(query_text, str):
-        msg = "Invalid query text provided (empty or not a string)."
-        logger.error(msg)
-        raise ValueError(msg)
-    if not db.is_initialized or db.count() <= 0: # Check count is positive
-        logger.warning(
-            "Cannot perform search: The database is empty or not initialized."
-        )
+    if not query_text or not isinstance(query_text, str): raise ValueError("Invalid query text.")
+    if not db.is_initialized: raise PipelineError(f"Database (Collection: '{collection_name}') is not initialized.")
+    if db.count() <= 0:
+        logger.warning(f"Cannot search: Collection '{collection_name}' is empty.")
         return SearchResults(items=[])
 
     try:
         logger.info("Vectorizing query text...")
-        # Usa la instancia de vectorizer y truncate_dim proporcionados
+        # Vectoriza usando la dimensión de truncamiento proporcionada
         query_embedding_list = vectorizer.vectorize_texts(
-            [query_text],
-            batch_size=1,
-            truncate_dim=truncate_dim,
-            is_query=True,
+            [query_text], batch_size=1, truncate_dim=truncate_dim, is_query=True
         )
-
         if not query_embedding_list or query_embedding_list[0] is None:
-            msg = "Failed to vectorize the query text. Cannot perform search."
-            logger.error(msg)
-            raise PipelineError(msg)
+            raise PipelineError("Failed to vectorize the query text.")
 
         query_embedding = query_embedding_list[0]
-        logger.info(
-            f"Query text vectorized successfully (dim: {len(query_embedding)})."
-        )
+        logger.info(f"Query text vectorized successfully (dim: {len(query_embedding)}).")
 
-        logger.info(f"Querying database for top {n_results} similar images...")
+        logger.info(f"Querying collection '{collection_name}' for top {n_results} similar images...")
         # Usa la instancia de db proporcionada
         results: Optional[SearchResults] = db.query_similar(
             query_embedding=query_embedding, n_results=n_results
         )
 
-        if results is None:
-            msg = "Database query failed. Check VectorDatabase logs."
-            logger.error(msg)
-            raise PipelineError(msg)
-        elif results.is_empty:
-            logger.info(
-                "Search successful, but no similar images found in the database."
-            )
-        else:
-            logger.info(f"Search successful. Found {results.count} results.")
+        if results is None: raise PipelineError(f"Database query failed on collection '{collection_name}'.")
+        elif results.is_empty: logger.info("Search successful, but no similar images found.")
+        else: logger.info(f"Search successful. Found {results.count} results.")
 
         logger.info("--- Text-to-Image Search Finished ---")
         return results
 
     except (VectorizerError, DatabaseError) as e:
-        logger.error(f"Error during text search pipeline: {e}", exc_info=True)
+        logger.error(f"Error during text search pipeline on '{collection_name}': {e}", exc_info=True)
         raise PipelineError(f"Text search failed: {e}") from e
     except Exception as e:
-        logger.error(
-            f"Unexpected error during text search pipeline: {e}", exc_info=True
-        )
+        logger.error(f"Unexpected error during text search pipeline on '{collection_name}': {e}", exc_info=True)
         raise PipelineError(f"Unexpected text search failure: {e}") from e
 
 
-# --- Image Search ---
+# --- Image Search (Modificado para usar db y truncate_dim directamente) ---
 def search_by_image(
     query_image_path: str,
-    vectorizer: Vectorizer, # Passed as argument
-    db: VectorDBInterface,  # Passed as argument
-    n_results: int = DEFAULT_N_RESULTS,
-    truncate_dim: Optional[int] = None, # Passed as argument
+    vectorizer: Vectorizer,
+    db: VectorDBInterface,  # <-- RECIBE LA INSTANCIA DE BD CORRECTA
+    n_results: int = config.DEFAULT_N_RESULTS,
+    truncate_dim: Optional[int] = None, # <-- RECIBE LA DIMENSIÓN CORRECTA
 ) -> SearchResults:
     """
-    Busca imágenes similares a una imagen de consulta dada usando VectorDBInterface.
-
-    Filtra la propia imagen de consulta de los resultados si se encuentra (usando rutas absolutas).
-
-    Args:
-        query_image_path: Ruta al archivo de imagen de consulta.
-        vectorizer: Instancia de Vectorizer inicializada (para el modelo correcto).
-        db: Instancia inicializada que cumple con VectorDBInterface.
-        n_results: El número máximo de resultados a devolver (excluyendo la imagen de consulta).
-        truncate_dim: Dimensión utilizada para la vectorización (puede ser None).
-
-    Returns:
-        Un objeto SearchResults que contiene los resultados. Devuelve un
-        SearchResults vacío si la búsqueda fue exitosa pero no encontró coincidencias.
-
-    Raises:
-        PipelineError: Si la búsqueda falla (ej: fallo al cargar/vectorizar consulta, error de BD).
-        FileNotFoundError: Si el archivo query_image_path no existe.
-        ValueError: Si la ruta query_image_path es inválida.
+    Busca imágenes similares a una imagen de consulta usando la BD y dimensión proporcionadas.
     """
-    logger.info(
-        f"--- Performing Image-to-Image Search using query image: '{query_image_path}' ---"
-    )
+    collection_name = _get_db_collection_name(db)
+    effective_dim_str = str(truncate_dim) if truncate_dim else 'Full'
+    logger.info(f"--- Performing Image-to-Image Search on Collection '{collection_name}' ---")
+    logger.info(f"  Query Image: '{query_image_path}'")
     logger.info(f"  Using Vectorizer Model: {vectorizer.model_name}")
-    logger.info(f"  Target Embedding Dimension: {truncate_dim or 'Full'}")
+    logger.info(f"  Target Embedding Dimension: {effective_dim_str}")
 
-
-    if not query_image_path or not isinstance(query_image_path, str):
-        msg = "Invalid query image path provided."
-        logger.error(msg)
-        raise ValueError(msg)
-    if not os.path.isfile(query_image_path):
-        msg = f"Query image file not found at path: {query_image_path}"
-        logger.error(msg)
-        raise FileNotFoundError(msg)
-    if not db.is_initialized or db.count() <= 0: # Check count is positive
-        logger.warning(
-            "Cannot perform search: The database is empty or not initialized."
-        )
+    if not query_image_path or not isinstance(query_image_path, str): raise ValueError("Invalid query image path.")
+    if not os.path.isfile(query_image_path): raise FileNotFoundError(f"Query image file not found: {query_image_path}")
+    if not db.is_initialized: raise PipelineError(f"Database (Collection: '{collection_name}') is not initialized.")
+    if db.count() <= 0:
+        logger.warning(f"Cannot search: Collection '{collection_name}' is empty.")
         return SearchResults(items=[])
 
     try:
-        logger.info("Loading query image...")
-        # Usa la función de core.image_processor
+        logger.info("Loading and vectorizing query image...")
         query_image = load_image(query_image_path)
-        if not query_image:
-            # load_image already logged the error
-            raise PipelineError(f"Failed to load query image at {query_image_path}.")
+        if not query_image: raise PipelineError(f"Failed to load query image: {query_image_path}.")
 
-        logger.info("Vectorizing query image...")
-        # Usa la instancia de vectorizer y truncate_dim proporcionados
+        # Vectoriza usando la dimensión de truncamiento proporcionada
         query_embedding_list = vectorizer.vectorize_images(
             [query_image], batch_size=1, truncate_dim=truncate_dim
         )
@@ -177,376 +119,231 @@ def search_by_image(
             raise PipelineError("Failed to vectorize the query image.")
 
         query_embedding = query_embedding_list[0]
-        logger.info(
-            f"Query image vectorized successfully (dim: {len(query_embedding)})."
-        )
+        logger.info(f"Query image vectorized successfully (dim: {len(query_embedding)}).")
 
-        # Fetch n+1 results initially to better handle self-filtering
-        effective_n_results = n_results + 1
-        logger.info(
-            f"Querying database for top {effective_n_results} similar images (will filter query image)..."
-        )
+        effective_n_results = n_results + 1 # Obtener uno extra para filtrar
+        logger.info(f"Querying collection '{collection_name}' for top {effective_n_results} similar images...")
 
         # Usa la instancia de db proporcionada
         initial_results: Optional[SearchResults] = db.query_similar(
             query_embedding=query_embedding, n_results=effective_n_results
         )
 
-        if initial_results is None:
-            raise PipelineError("Database query failed. Check VectorDatabase logs.")
+        if initial_results is None: raise PipelineError(f"Database query failed on collection '{collection_name}'.")
 
-        filtered_items: List[SearchResultItem] = [] # Explicit type hint
-        results_to_return: SearchResults # Explicit type hint
+        # --- Filtrado de la imagen de consulta (sin cambios en la lógica) ---
+        filtered_items: List[SearchResultItem] = []
+        results_to_return: SearchResults
 
         if not initial_results.is_empty:
-            logger.info(
-                f"Search successful. Found {initial_results.count} potential results (before filtering)."
-            )
-            # Usa rutas absolutas para la comparación
-            normalized_query_path = os.path.abspath(query_image_path)
-            logger.debug(f"Normalized query path for filtering: '{normalized_query_path}'")
+             logger.info(f"Search successful. Found {initial_results.count} potential results (before filtering).")
+             normalized_query_path = os.path.abspath(query_image_path)
+             for item in initial_results.items:
+                 if item.id and isinstance(item.id, str):
+                     try:
+                         # Asume IDs absolutos
+                         normalized_result_path = item.id
+                         is_exact_match = (normalized_result_path == normalized_query_path) and (item.distance is not None and item.distance < 1e-6)
+                         if not is_exact_match: filtered_items.append(item)
+                         else: logger.info(f"  (Excluding query image '{item.id}' itself from results)")
+                     except Exception as path_err:
+                          logger.warning(f"Could not compare path '{item.id}': {path_err}")
+                          filtered_items.append(item) # Conservar si falla la comparación
+                 else:
+                      filtered_items.append(item) # Conservar si ID es inválido
 
-            for item in initial_results.items:
-                # Ensure item.id is a valid path before normalizing
-                if item.id and isinstance(item.id, str):
-                    try:
-                        # Asume que los IDs almacenados son ahora absolutos
-                        normalized_result_path = item.id # No necesita abspath si ya es absoluto
-                        # Si aún pudieran existir rutas relativas (durante transición), usar abspath:
-                        # normalized_result_path = os.path.abspath(item.id)
-
-                        # Check for exact path match AND very small distance (cosine distance ~0 for identical vectors)
-                        is_exact_match = (normalized_result_path == normalized_query_path) and (
-                            item.distance is not None and item.distance < 1e-6
-                        )
-
-                        if not is_exact_match:
-                            filtered_items.append(item)
-                        else:
-                            logger.info(
-                                f"  (Excluding query image '{item.id}' itself from results based on path and distance)"
-                            )
-                    except Exception as path_err:
-                         logger.warning(f"Could not normalize or compare path '{item.id}': {path_err}")
-                         filtered_items.append(item) # Keep if path processing fails
-                else:
-                     logger.warning(f"Invalid item ID found in results: {item.id}")
-                     # Decide whether to keep or discard items with invalid IDs
-                     # filtered_items.append(item) # Option: Keep it
-
-            # Take the top n results from the filtered list
-            final_items = filtered_items[:n_results]
-            # Create a new SearchResults object without modifying the original query_vector field
-            final_results = SearchResults(
-                items=final_items # Pass only the filtered items
-                # query_vector=query_embedding # Don't set query_vector if SearchResults is frozen
-            )
-
-            if final_results.is_empty:
-                logger.info(
-                    "No similar images found (after filtering the exact query match)."
-                )
-            else:
-                logger.info(f"Returning {final_results.count} results after filtering.")
-
-            results_to_return = final_results
+             final_items = filtered_items[:n_results]
+             final_results = SearchResults(items=final_items)
+             if final_results.is_empty: logger.info("No similar images found (after filtering).")
+             else: logger.info(f"Returning {final_results.count} results after filtering.")
+             results_to_return = final_results
         else:
-            logger.info(
-                "Search successful, but no similar images found in the database initially."
-            )
-            results_to_return = initial_results # Return the empty SearchResults
+             logger.info("Search successful, but no similar images found initially.")
+             results_to_return = initial_results # Devuelve SearchResults vacío
 
     except (VectorizerError, DatabaseError, ImageProcessingError) as e:
-        logger.error(f"Error during image search pipeline: {e}", exc_info=True)
+        logger.error(f"Error during image search pipeline on '{collection_name}': {e}", exc_info=True)
         raise PipelineError(f"Image search failed: {e}") from e
-    except FileNotFoundError as e:  # Re-raise specific error
-        raise e
+    except FileNotFoundError as e: raise e # Re-lanzar
     except Exception as e:
-        logger.error(
-            f"Unexpected error during image search pipeline or filtering: {e}",
-            exc_info=True,
-        )
+        logger.error(f"Unexpected error during image search pipeline on '{collection_name}': {e}", exc_info=True)
         raise PipelineError(f"Unexpected image search failure: {e}") from e
 
     logger.info("--- Image-to-Image Search Finished ---")
     return results_to_return
 
 
-# --- Hybrid Search (Interpolated Embedding Method) ---
+# --- Hybrid Search (Interpolated) (Modificado para usar db y truncate_dim directamente) ---
 def search_hybrid(
     query_text: str,
     query_image_path: str,
-    vectorizer: Vectorizer, # Passed as argument
-    db: VectorDBInterface,  # Passed as argument
-    n_results: int = DEFAULT_N_RESULTS,
-    truncate_dim: Optional[int] = None, # Passed as argument
-    alpha: float = 0.5, # Weight for text (0 to 1)
+    vectorizer: Vectorizer,
+    db: VectorDBInterface,  # <-- RECIBE LA INSTANCIA DE BD CORRECTA
+    n_results: int = config.DEFAULT_N_RESULTS,
+    truncate_dim: Optional[int] = None, # <-- RECIBE LA DIMENSIÓN CORRECTA
+    alpha: float = 0.5,
 ) -> SearchResults:
     """
-    Busca imágenes combinando una consulta de texto y una imagen de ejemplo.
-
-    Realiza una interpolación lineal ponderada de los vectores normalizados ANTES de la búsqueda.
-
-    Args:
-        query_text: Descripción textual.
-        query_image_path: Ruta a la imagen de ejemplo.
-        vectorizer: Instancia de Vectorizer inicializada (para el modelo correcto).
-        db: Instancia inicializada que cumple con VectorDBInterface.
-        n_results: Número de resultados.
-        truncate_dim: Dimensión de embedding (puede ser None).
-        alpha: Peso del texto (0=solo imagen, 1=solo texto) para la interpolación de embeddings.
-
-    Returns:
-        SearchResults.
-
-    Raises:
-        PipelineError: Si la búsqueda falla.
-        FileNotFoundError: Si la imagen de consulta no se encuentra.
-        ValueError: Si alpha es inválido o las entradas son incorrectas.
+    Busca imágenes combinando texto e imagen (interpolación) usando la BD y dimensión proporcionadas.
     """
-    logger.info(f"--- Performing Hybrid Search (Interpolated Embedding, Alpha={alpha}) ---")
+    collection_name = _get_db_collection_name(db)
+    effective_dim_str = str(truncate_dim) if truncate_dim else 'Full'
+    logger.info(f"--- Performing Hybrid Search (Interpolated, Alpha={alpha}) on Collection '{collection_name}' ---")
     logger.info(f"  Text Query: '{query_text}'")
     logger.info(f"  Image Query Path: '{query_image_path}'")
     logger.info(f"  Using Vectorizer Model: {vectorizer.model_name}")
-    logger.info(f"  Target Embedding Dimension: {truncate_dim or 'Full'}")
+    logger.info(f"  Target Embedding Dimension: {effective_dim_str}")
 
-
-    if not 0.0 <= alpha <= 1.0:
-         raise ValueError("Alpha must be between 0.0 and 1.0")
-    if not query_text or not isinstance(query_text, str):
-        raise ValueError("Invalid query text provided.")
-    if not query_image_path or not isinstance(query_image_path, str):
-        raise ValueError("Invalid query image path provided.")
-    if not os.path.isfile(query_image_path):
-        raise FileNotFoundError(f"Query image file not found: {query_image_path}")
-    if not db.is_initialized or db.count() <= 0: # Check count is positive
-        logger.warning("DB is empty or not initialized for hybrid search.")
+    # --- Validaciones de entrada (sin cambios) ---
+    if not 0.0 <= alpha <= 1.0: raise ValueError("Alpha must be between 0.0 and 1.0")
+    if not query_text or not isinstance(query_text, str): raise ValueError("Invalid query text.")
+    if not query_image_path or not isinstance(query_image_path, str): raise ValueError("Invalid query image path.")
+    if not os.path.isfile(query_image_path): raise FileNotFoundError(f"Query image file not found: {query_image_path}")
+    if not db.is_initialized: raise PipelineError(f"Database (Collection: '{collection_name}') is not initialized.")
+    if db.count() <= 0:
+        logger.warning(f"Cannot search: Collection '{collection_name}' is empty.")
         return SearchResults(items=[])
+    # --- Fin Validaciones ---
 
     try:
-        # 1. Vectorize Text
+        # 1. Vectorizar Texto (usando truncate_dim)
         logger.debug("Vectorizing hybrid query text...")
         text_embedding_list = vectorizer.vectorize_texts(
             [query_text], batch_size=1, truncate_dim=truncate_dim, is_query=True
         )
-        if not text_embedding_list or text_embedding_list[0] is None:
-            raise PipelineError("Failed to vectorize text for hybrid query.")
-        # Convert to numpy array and ensure L2 normalization
+        if not text_embedding_list or text_embedding_list[0] is None: raise PipelineError("Failed to vectorize text.")
         text_embedding = np.array(text_embedding_list[0], dtype=np.float32)
-        text_norm = np.linalg.norm(text_embedding)
-        if text_norm > 1e-6:
-            text_embedding /= text_norm
-        else:
-             # Handle zero norm case if necessary, e.g., raise error or return empty
-             logger.error("Text embedding norm is zero or near zero.")
-             raise PipelineError("Text embedding norm is zero.")
-        logger.debug(f"Text embedding generated (shape: {text_embedding.shape})")
+        text_norm = np.linalg.norm(text_embedding); text_embedding /= text_norm if text_norm > 1e-6 else 1.0
 
-
-        # 2. Vectorize Image
+        # 2. Vectorizar Imagen (usando truncate_dim)
         logger.debug("Loading and vectorizing hybrid query image...")
-        # Usa la función de core.image_processor
         query_image = load_image(query_image_path)
-        if not query_image:
-            # Error already logged by load_image
-            raise PipelineError(f"Failed to load hybrid query image: {query_image_path}")
-
+        if not query_image: raise PipelineError(f"Failed to load hybrid query image: {query_image_path}")
         image_embedding_list = vectorizer.vectorize_images(
             [query_image], batch_size=1, truncate_dim=truncate_dim
         )
-        if not image_embedding_list or image_embedding_list[0] is None:
-             raise PipelineError("Failed to vectorize image for hybrid query.")
-        # Convert to numpy array and ensure L2 normalization
+        if not image_embedding_list or image_embedding_list[0] is None: raise PipelineError("Failed to vectorize image.")
         image_embedding = np.array(image_embedding_list[0], dtype=np.float32)
-        image_norm = np.linalg.norm(image_embedding)
-        if image_norm > 1e-6:
-            image_embedding /= image_norm
-        else:
-             # Handle zero norm case
-             logger.error("Image embedding norm is zero or near zero.")
-             raise PipelineError("Image embedding norm is zero.")
-        logger.debug(f"Image embedding generated (shape: {image_embedding.shape})")
+        image_norm = np.linalg.norm(image_embedding); image_embedding /= image_norm if image_norm > 1e-6 else 1.0
 
-
-        # 3. Combine Embeddings (Weighted Average)
+        # 3. Combinar y Normalizar (sin cambios en lógica)
         logger.info(f"Combining embeddings with alpha={alpha}")
-        # Ensure dimensions match (should if using the same truncate_dim)
-        if text_embedding.shape != image_embedding.shape:
-            raise PipelineError(f"Incompatible embedding dimensions for combining: Text={text_embedding.shape}, Image={image_embedding.shape}")
-
+        if text_embedding.shape != image_embedding.shape: raise PipelineError("Incompatible embedding dimensions.")
         hybrid_embedding_np = (alpha * text_embedding) + ((1.0 - alpha) * image_embedding)
-
-        # 4. Re-Normalize the combined vector
         hybrid_norm = np.linalg.norm(hybrid_embedding_np)
-        if hybrid_norm > 1e-6: # Avoid division by zero
-            hybrid_embedding_np /= hybrid_norm
-        else:
-            logger.warning("Hybrid embedding norm is near zero. Using text embedding as fallback.")
-            # Fallback strategy: use text or image embedding directly? Or raise error?
-            # Using text embedding as a simple fallback here.
-            hybrid_embedding_np = text_embedding # Assign normalized text vector
-
+        if hybrid_norm > 1e-6: hybrid_embedding_np /= hybrid_norm
+        else: hybrid_embedding_np = text_embedding # Fallback
         hybrid_embedding = hybrid_embedding_np.tolist()
         logger.info(f"Hybrid embedding generated (Dim: {len(hybrid_embedding)}).")
 
-        # 5. Query the Database
-        logger.info(f"Querying DB with hybrid embedding (n_results={n_results})...")
+        # 4. Consultar la BD (usando la instancia 'db' proporcionada)
+        logger.info(f"Querying collection '{collection_name}' with hybrid embedding (n_results={n_results})...")
         results: Optional[SearchResults] = db.query_similar(
             query_embedding=hybrid_embedding, n_results=n_results
         )
 
-        if results is None:
-            raise PipelineError("Hybrid database query failed.")
-        elif results.is_empty:
-            logger.info("Hybrid search successful, but no results found.")
-        else:
-            logger.info(f"Hybrid search successful. Found {results.count} results.")
-
-        # --- REMOVED assignment to frozen field ---
-        # results.query_vector = hybrid_embedding
-        # ---
+        if results is None: raise PipelineError(f"Hybrid database query failed on collection '{collection_name}'.")
+        elif results.is_empty: logger.info("Hybrid search successful, but no results found.")
+        else: logger.info(f"Hybrid search successful. Found {results.count} results.")
 
         logger.info("--- Hybrid Search (Interpolated Embedding) Finished ---")
         return results
 
     except (VectorizerError, DatabaseError, ImageProcessingError, FileNotFoundError, ValueError) as e:
-        logger.error(f"Error during hybrid search pipeline: {e}", exc_info=False) # Log less verbose for known errors
+        logger.error(f"Error during hybrid search pipeline on '{collection_name}': {e}", exc_info=False)
         raise PipelineError(f"Hybrid search failed: {e}") from e
     except Exception as e:
-        logger.error(f"Unexpected error during hybrid pipeline: {e}", exc_info=True)
+        logger.error(f"Unexpected error during hybrid pipeline on '{collection_name}': {e}", exc_info=True)
         raise PipelineError(f"Unexpected hybrid search failure: {e}") from e
 
 
-# --- Hybrid Search (Reciprocal Rank Fusion - RRF) ---
+# --- Hybrid Search (RRF) (Modificado para usar db y truncate_dim directamente) ---
 def search_hybrid_rrf(
     query_text: str,
     query_image_path: str,
     vectorizer: Vectorizer,
-    db: VectorDBInterface,
-    n_results: int = DEFAULT_N_RESULTS,
-    truncate_dim: Optional[int] = None,
-    k_rrf: int = 60,  # Constant for RRF, as suggested in the PDF
+    db: VectorDBInterface, # <-- RECIBE LA INSTANCIA DE BD CORRECTA
+    n_results: int = config.DEFAULT_N_RESULTS,
+    truncate_dim: Optional[int] = None, # <-- RECIBE LA DIMENSIÓN CORRECTA
+    k_rrf: int = 60,
 ) -> SearchResults:
     """
-    Performs hybrid search using Reciprocal Rank Fusion (RRF).
-
-    Executes separate text and image searches, then fuses the ranked lists using RRF.
-
-    Args:
-        query_text: Textual description.
-        query_image_path: Path to the example image.
-        vectorizer: Initialized Vectorizer instance.
-        db: Initialized VectorDBInterface instance.
-        n_results: Final number of results to return after fusion.
-        truncate_dim: Embedding dimension (optional).
-        k_rrf: Constant used in the RRF formula (default: 60).
-
-    Returns:
-        SearchResults containing the fused and re-ranked results.
-
-    Raises:
-        PipelineError: If search fails.
-        FileNotFoundError: If query image not found.
-        ValueError: If inputs are invalid.
+    Realiza búsqueda híbrida (RRF) usando la BD y dimensión proporcionadas.
     """
-    logger.info(f"--- Performing Hybrid Search (Reciprocal Rank Fusion, k={k_rrf}) ---")
+    collection_name = _get_db_collection_name(db)
+    effective_dim_str = str(truncate_dim) if truncate_dim else 'Full'
+    logger.info(f"--- Performing Hybrid Search (RRF, k={k_rrf}) on Collection '{collection_name}' ---")
     logger.info(f"  Text Query: '{query_text}'")
     logger.info(f"  Image Query Path: '{query_image_path}'")
     logger.info(f"  Using Vectorizer Model: {vectorizer.model_name}")
-    logger.info(f"  Target Embedding Dimension: {truncate_dim or 'Full'}")
+    logger.info(f"  Target Embedding Dimension: {effective_dim_str}")
 
-    # --- Input Validation (similar to search_hybrid) ---
-    if not query_text or not isinstance(query_text, str):
-        raise ValueError("Invalid query text provided.")
-    if not query_image_path or not isinstance(query_image_path, str):
-        raise ValueError("Invalid query image path provided.")
-    if not os.path.isfile(query_image_path):
-        raise FileNotFoundError(f"Query image file not found: {query_image_path}")
-    if not db.is_initialized or db.count() <= 0:
-        logger.warning("DB is empty or not initialized for RRF hybrid search.")
+    # --- Validaciones de entrada (sin cambios) ---
+    if not query_text or not isinstance(query_text, str): raise ValueError("Invalid query text.")
+    if not query_image_path or not isinstance(query_image_path, str): raise ValueError("Invalid query image path.")
+    if not os.path.isfile(query_image_path): raise FileNotFoundError(f"Query image file not found: {query_image_path}")
+    if not db.is_initialized: raise PipelineError(f"Database (Collection: '{collection_name}') is not initialized.")
+    if db.count() <= 0:
+        logger.warning(f"Cannot search: Collection '{collection_name}' is empty.")
         return SearchResults(items=[])
-    # --- End Validation ---
+    # --- Fin Validaciones ---
 
     try:
-        # --- 1. Perform Independent Searches ---
-        # Fetch more results initially for better fusion overlap (e.g., 2*n_results)
-        fetch_n = max(n_results * 2, 20) # Fetch more for better ranking
-        logger.info(f"Performing independent text search (n_results={fetch_n})...")
-        # Call the function from *this* module
-        text_results: SearchResults = search_by_text(
-            query_text=query_text,
-            vectorizer=vectorizer,
-            db=db,
-            n_results=fetch_n,
-            truncate_dim=truncate_dim,
+        # 1. Realizar búsquedas independientes (usando la 'db' y 'truncate_dim' correctas)
+        fetch_n = max(n_results * 2, 20)
+        logger.info(f"Performing independent text search (n_results={fetch_n}) on '{collection_name}'...")
+        text_results: SearchResults = search_by_text( # Llama a la función modificada
+            query_text=query_text, vectorizer=vectorizer, db=db, n_results=fetch_n, truncate_dim=truncate_dim,
         )
         logger.info(f"Text search yielded {text_results.count} results.")
 
-        logger.info(f"Performing independent image search (n_results={fetch_n})...")
-        # Call the function from *this* module
-        image_results: SearchResults = search_by_image(
-            query_image_path=query_image_path,
-            vectorizer=vectorizer,
-            db=db,
-            n_results=fetch_n,
-            truncate_dim=truncate_dim,
+        logger.info(f"Performing independent image search (n_results={fetch_n}) on '{collection_name}'...")
+        image_results: SearchResults = search_by_image( # Llama a la función modificada
+            query_image_path=query_image_path, vectorizer=vectorizer, db=db, n_results=fetch_n, truncate_dim=truncate_dim,
         )
         logger.info(f"Image search yielded {image_results.count} results.")
 
-        # --- 2. Reciprocal Rank Fusion ---
+        # 2. Fusión RRF (sin cambios en la lógica)
         logger.info(f"Fusing results using RRF (k={k_rrf})...")
         rrf_scores: Dict[str, float] = {}
-        doc_metadata: Dict[str, Dict[str, Any]] = {} # Store metadata for final results
+        doc_metadata: Dict[str, Dict[str, Any]] = {}
 
-        # Process text results
         if not text_results.is_empty:
             for rank, item in enumerate(text_results.items):
-                if item.id: # Ensure ID is valid
-                    score = 1.0 / (k_rrf + rank + 1) # Rank is 0-based
+                if item.id:
+                    score = 1.0 / (k_rrf + rank + 1)
                     rrf_scores[item.id] = rrf_scores.get(item.id, 0.0) + score
-                    if item.id not in doc_metadata:
-                         doc_metadata[item.id] = item.metadata or {} # Store metadata
+                    if item.id not in doc_metadata: doc_metadata[item.id] = item.metadata or {}
 
-        # Process image results
         if not image_results.is_empty:
             for rank, item in enumerate(image_results.items):
-                 if item.id: # Ensure ID is valid
-                    score = 1.0 / (k_rrf + rank + 1) # Rank is 0-based
+                 if item.id:
+                    score = 1.0 / (k_rrf + rank + 1)
                     rrf_scores[item.id] = rrf_scores.get(item.id, 0.0) + score
-                    if item.id not in doc_metadata:
-                         doc_metadata[item.id] = item.metadata or {} # Store metadata
+                    if item.id not in doc_metadata: doc_metadata[item.id] = item.metadata or {}
 
-        # --- 3. Sort by RRF Score ---
+        # 3. Ordenar y Construir Resultados (sin cambios en la lógica)
         if not rrf_scores:
             logger.info("No results found from either text or image search for RRF.")
             return SearchResults(items=[])
 
-        # Sort document IDs by their RRF score in descending order
         sorted_ids = sorted(rrf_scores.keys(), key=lambda doc_id: rrf_scores[doc_id], reverse=True)
-
-        # --- 4. Construct Final Results ---
         final_results_items: List[SearchResultItem] = []
-        for rank, doc_id in enumerate(sorted_ids[:n_results]): # Take top n_results
-            # Create SearchResultItem. Distance can represent the RRF score (higher is better)
-            # To make it behave like distance (lower is better), we can invert or negate.
-            # Using 1/score or max_score - score. Let's use RRF score directly for now,
-            # but note it's a similarity score, not distance.
-            # Or set distance=None and rely on order. Let's use RRF score as 'distance' for simplicity.
-            item = SearchResultItem(
-                id=doc_id,
-                distance=rrf_scores[doc_id], # Store RRF score here (higher=better)
-                metadata=doc_metadata.get(doc_id, {})
-            )
+        for rank, doc_id in enumerate(sorted_ids[:n_results]):
+            # Añadir metadato para indicar que es RRF
+            final_meta = doc_metadata.get(doc_id, {})
+            final_meta["fusion_method"] = "RRF"
+            item = SearchResultItem(id=doc_id, distance=rrf_scores[doc_id], metadata=final_meta)
             final_results_items.append(item)
 
         logger.info(f"RRF fusion completed. Returning top {len(final_results_items)} results.")
         logger.info("--- Hybrid Search (RRF) Finished ---")
-        # Note: query_vector is not applicable here as there isn't a single query vector
         return SearchResults(items=final_results_items)
 
     except (PipelineError, FileNotFoundError, ValueError) as e:
-        logger.error(f"Error during RRF hybrid search pipeline: {e}", exc_info=False)
+        logger.error(f"Error during RRF hybrid search pipeline on '{collection_name}': {e}", exc_info=False)
         raise PipelineError(f"RRF hybrid search failed: {e}") from e
     except Exception as e:
-        logger.error(f"Unexpected error during RRF hybrid pipeline: {e}", exc_info=True)
+        logger.error(f"Unexpected error during RRF hybrid pipeline on '{collection_name}': {e}", exc_info=True)
         raise PipelineError(f"Unexpected RRF hybrid search failure: {e}") from e
+
