@@ -1,0 +1,326 @@
+﻿/* --- app/ui/style.css --- */
+
+/* Importar fuentes de Google Fonts */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&family=Lato:wght@400;700&display=swap');
+
+/* Variables de Color (Paleta Ejemplo - ¡Ajústala a tu gusto!) */
+:root {
+  --primary-color: #007bff;       /* Azul primario */
+  --primary-darker: #0056b3;     /* Azul más oscuro para hover */
+  --secondary-color: #6c757d;    /* Gris secundario */
+  --background-color: #f8f9fa;  /* Fondo general muy claro */
+  --content-bg-color: #ffffff;   /* Fondo para contenido/tarjetas */
+  --text-color: #212529;        /* Color de texto principal */
+  --text-muted-color: #6c757d;   /* Color de texto secundario/atenuado */
+  --success-color: #28a745;      /* Verde para éxito */
+  --warning-color: #ffc107;      /* Amarillo para advertencia */
+  --error-color: #dc3545;       /* Rojo para error */
+  --info-color: #17a2b8;        /* Azul claro para info */
+  --border-color: #dee2e6;       /* Color de borde sutil */
+  --border-radius-base: 0.3rem; /* Redondez de borde base */
+  --box-shadow-light: 0 1px 3px rgba(0,0,0,0.08);
+  --box-shadow-medium: 0 4px 8px rgba(0,0,0,0.1);
+}
+
+/* Estilos Generales */
+body {
+  font-family: 'Lato', sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+  color: var(--text-color);
+  background-color: var(--background-color);
+}
+
+h1, h2, h3, h4, h5, h6 {
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  color: var(--primary-darker); /* Un color primario más oscuro para títulos */
+  margin-top: 1.5rem;
+  margin-bottom: 1rem;
+}
+
+h1 { font-size: 2.25rem; font-weight: 700; }
+h2 { font-size: 1.75rem; }
+h3 { font-size: 1.5rem; } /* Usado para st.header */
+
+/* Contenedor Principal y Sidebar */
+.main .block-container {
+  padding: 2rem 2.5rem; /* Más padding */
+}
+
+.stSidebar > div:first-child {
+    padding: 1.5rem;
+    background-color: var(--content-bg-color); /* Fondo blanco para sidebar */
+    border-right: 1px solid var(--border-color);
+}
+.stSidebar .stHeader { /* Cabeceras en la sidebar */
+    font-size: 1.1rem;
+    font-weight: 600;
+    color: var(--primary-color);
+    margin-top: 1rem;
+    margin-bottom: 0.5rem;
+}
+.stSidebar .stCaption {
+    font-size: 0.85rem;
+    color: var(--text-muted-color);
+    margin-bottom: 0.3rem;
+}
+
+/* Estilos para Pestañas (Tabs) */
+.stTabs {
+    border-bottom: 1px solid var(--border-color);
+    margin-bottom: 1.5rem;
+}
+.stTabs [data-baseweb="tab-list"] {
+  gap: 5px; /* Espacio entre pestañas */
+  padding-bottom: 0; /* Quitar padding inferior si lo hubiera */
+}
+.stTabs [data-baseweb="tab"] {
+  height: auto; /* Altura automática */
+  white-space: normal; /* Permitir wrap */
+  background-color: transparent; /* Fondo transparente por defecto */
+  border-radius: var(--border-radius-base) var(--border-radius-base) 0 0;
+  border: 1px solid transparent; /* Borde transparente */
+  border-bottom: none; /* Sin borde inferior */
+  padding: 0.75rem 1rem; /* Ajustar padding */
+  margin-bottom: -1px; /* Solapar con el borde inferior del contenedor */
+  font-family: 'Inter', sans-serif;
+  font-weight: 600;
+  color: var(--text-muted-color);
+  transition: all 0.2s ease;
+}
+.stTabs [data-baseweb="tab"]:hover {
+    background-color: rgba(0, 123, 255, 0.05); /* Fondo sutil al pasar el ratón */
+    color: var(--primary-darker);
+}
+.stTabs [aria-selected="true"] {
+  background-color: var(--content-bg-color); /* Fondo blanco para activa */
+  color: var(--primary-color);
+  border-color: var(--border-color); /* Borde visible */
+  border-bottom: 1px solid var(--content-bg-color); /* "Borrar" borde inferior */
+}
+
+/* Estilos para Botones */
+.stButton > button {
+  border-radius: var(--border-radius-base);
+  padding: 0.5rem 1rem;
+  font-weight: 600;
+  transition: all 0.2s ease;
+  border: 1px solid transparent;
+  margin-bottom: 1rem; /* Espacio debajo de botones */
+}
+/* Botón Primario (type="primary") */
+.stButton > button:first-child:not(:disabled) { /* Asume que el primario es el primero */
+  background-color: var(--primary-color);
+  color: white;
+  border-color: var(--primary-color);
+}
+.stButton > button:first-child:hover:not(:disabled) {
+  background-color: var(--primary-darker);
+  border-color: var(--primary-darker);
+  transform: translateY(-1px); /* Ligero levantamiento */
+  box-shadow: var(--box-shadow-light);
+}
+/* Botón Secundario (default) */
+.stButton > button:not(:first-child):not(:disabled),
+.stButton > button:disabled { /* Estilo para deshabilitados y secundarios */
+  background-color: var(--content-bg-color);
+  color: var(--text-color);
+  border: 1px solid var(--border-color);
+}
+.stButton > button:not(:first-child):hover:not(:disabled) {
+  background-color: var(--background-color);
+  border-color: var(--secondary-color);
+  color: var(--primary-darker);
+}
+.stButton > button:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+/* Botones peligrosos (ej: Limpiar/Eliminar) */
+.stButton > button[kind="secondary"] { /* Streamlit puede usar 'kind' */
+    border-color: var(--error-color);
+    color: var(--error-color);
+}
+.stButton > button[kind="secondary"]:hover:not(:disabled) {
+    background-color: rgba(220, 53, 69, 0.1); /* Fondo rojo muy sutil */
+    border-color: var(--error-color);
+    color: var(--error-color);
+}
+
+/* Estilos para Inputs y Widgets */
+.stTextInput input, .stTextArea textarea, .stNumberInput input {
+  border: 1px solid var(--border-color);
+  border-radius: var(--border-radius-base);
+  padding: 0.6rem 0.75rem;
+  transition: border-color 0.2s ease, box-shadow 0.2s ease;
+  margin-bottom: 1rem; /* Espacio debajo */
+}
+.stTextInput input:focus, .stTextArea textarea:focus, .stNumberInput input:focus {
+  border-color: var(--primary-color);
+  box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.2); /* Sutil glow al enfocar */
+}
+.stSlider {
+    margin-bottom: 1rem;
+}
+.stSlider [data-baseweb="slider"] > div:nth-child(2) { /* Riel del slider */
+  background-color: var(--primary-color) !important;
+}
+.stSelectbox > div { /* Contenedor del selectbox */
+    border-radius: var(--border-radius-base);
+    border: 1px solid var(--border-color);
+}
+.stSelectbox > div:focus-within { /* Al enfocar el selectbox */
+    border-color: var(--primary-color);
+    box-shadow: 0 0 0 0.2rem rgba(0, 123, 255, 0.2);
+}
+.stRadio {
+    margin-bottom: 1rem;
+}
+.stFileUploader {
+    margin-bottom: 1rem;
+    border: 2px dashed var(--border-color);
+    border-radius: var(--border-radius-base);
+    padding: 1rem;
+    background-color: var(--background-color);
+}
+.stFileUploader:hover {
+    border-color: var(--primary-color);
+}
+.stExpander {
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-base);
+    margin-bottom: 1rem;
+    background-color: var(--content-bg-color);
+}
+.stExpander header { /* Cabecera del expander */
+    font-weight: 600;
+    padding: 0.75rem 1rem;
+    border-bottom: 1px solid var(--border-color);
+}
+.stExpander div[role="button"] { /* Flecha del expander */
+    padding: 0.75rem;
+}
+
+/* Estilos para Resultados de Búsqueda */
+.result-item {
+  border: 1px solid var(--border-color);
+  padding: 15px;
+  border-radius: var(--border-radius-base);
+  margin-bottom: 15px;
+  text-align: center;
+  background-color: var(--content-bg-color);
+  box-shadow: var(--box-shadow-light);
+  transition: box-shadow 0.2s ease, transform 0.2s ease;
+  height: 100%; /* Para alinear en columnas */
+  display: flex;
+  flex-direction: column;
+  justify-content: space-between; /* Empuja caption abajo */
+}
+.result-item:hover {
+  box-shadow: var(--box-shadow-medium);
+  transform: translateY(-2px);
+}
+.result-item img {
+  max-width: 100%;
+  height: auto;
+  max-height: 150px; /* Limitar altura máxima de imagen */
+  object-fit: contain; /* Escalar sin distorsionar */
+  border-radius: 3px;
+  margin-bottom: 10px; /* Espacio entre imagen y caption */
+}
+.caption {
+  font-size: 0.8rem;
+  color: var(--text-muted-color);
+  word-wrap: break-word; /* Romper palabras largas */
+  margin-top: auto; /* Asegura que esté al fondo */
+}
+.caption strong { /* Para destacar el score/distancia */
+    color: var(--text-color);
+    font-weight: 600;
+}
+
+/* Estilo para Imagen de Consulta Seleccionada */
+.selected-query-image {
+   border: 2px solid var(--success-color); /* Borde verde */
+   padding: 8px;
+   border-radius: var(--border-radius-base);
+   margin-bottom: 15px;
+   display: inline-block; /* Ajustar al contenido */
+   background-color: #e9f7ef; /* Fondo verde muy pálido */
+}
+.selected-query-image img {
+    display: block; /* Evitar espacio extra debajo */
+}
+.selected-query-image .stImage > figcaption { /* Caption de la imagen seleccionada */
+    font-size: 0.85rem;
+    color: var(--success-color);
+    font-weight: 600;
+    text-align: center;
+    margin-top: 5px;
+}
+
+/* Estilos para Mensajes de Estado (Alerts) */
+.stAlert {
+  border-radius: var(--border-radius-base);
+  border-width: 1px;
+  border-style: solid;
+  padding: 1rem 1.25rem; /* Más padding */
+  margin-bottom: 1rem;
+  display: flex; /* Para alinear icono si se añade */
+  align-items: center;
+}
+.stAlert p { /* Texto dentro del alert */
+    margin-bottom: 0;
+    flex-grow: 1;
+}
+/* Iconos (requiere Font Awesome o similar) - Descomentar si se usa FA */
+/* .stAlert::before {
+    font-family: 'Font Awesome 6 Free';
+    font-weight: 900;
+    margin-right: 0.75rem;
+    font-size: 1.2em;
+} */
+
+.stAlert[data-baseweb="alert"][role="status"] { /* Success */
+  border-color: var(--success-color);
+  background-color: #d4edda;
+  color: #155724;
+}
+/* .stAlert[data-baseweb="alert"][role="status"]::before { content: '\f058'; color: var(--success-color); } */
+
+.stAlert[data-baseweb="alert"][role="alert"] { /* Error */
+   border-color: var(--error-color);
+   background-color: #f8d7da;
+   color: #721c24;
+}
+/* .stAlert[data-baseweb="alert"][role="alert"]::before { content: '\f071'; color: var(--error-color); } */
+
+.stAlert[data-baseweb="alert"][aria-atomic="true"] { /* Warning */
+   border-color: var(--warning-color);
+   background-color: #fff3cd;
+   color: #856404;
+}
+/* .stAlert[data-baseweb="alert"][aria-atomic="true"]::before { content: '\f06a'; color: var(--warning-color); } */
+
+.stAlert[data-baseweb="alert"]:not([role]):not([aria-atomic]) { /* Info */
+   border-color: var(--info-color);
+   background-color: #d1ecf1;
+   color: #0c5460;
+}
+/* .stAlert[data-baseweb="alert"]:not([role]):not([aria-atomic])::before { content: '\f05a'; color: var(--info-color); } */
+
+/* Estilo para st.divider */
+hr {
+    margin-top: 1.5rem;
+    margin-bottom: 1.5rem;
+    border-top: 1px solid var(--border-color);
+}
+
+/* Estilo para Plotly (Ajustes generales, más específicos en Python) */
+.plotly-graph-div {
+    border: 1px solid var(--border-color);
+    border-radius: var(--border-radius-base);
+    padding: 10px;
+    background-color: var(--content-bg-color);
+}
