@@ -1,9 +1,9 @@
-﻿# app/pipeline.py
+﻿## app/pipeline.py
 import math
 import os
 import time
 import logging
-from typing import Optional, List, Tuple, Callable, Any # Added Any
+from typing import Optional, List, Tuple, Callable, Any, Dict # Added Any, Dict
 import numpy as np # Added numpy
 
 from core.image_processor import find_image_files, batch_load_images, load_image
@@ -591,7 +591,7 @@ def search_by_image(
     return results_to_return
 
 
-# --- Hybrid Search ---
+# --- Hybrid Search (Interpolated Embedding Method) ---
 def search_hybrid(
     query_text: str,
     query_image_path: str,
@@ -604,7 +604,7 @@ def search_hybrid(
     """
     Busca imágenes combinando una consulta de texto y una imagen de ejemplo.
 
-    Realiza una interpolación lineal ponderada de los vectores normalizados.
+    Realiza una interpolación lineal ponderada de los vectores normalizados ANTES de la búsqueda.
 
     Args:
         query_text: Descripción textual.
@@ -613,7 +613,7 @@ def search_hybrid(
         db: Instancia inicializada que cumple con VectorDBInterface.
         n_results: Número de resultados.
         truncate_dim: Dimensión de embedding (puede ser None).
-        alpha: Peso del texto (0=solo imagen, 1=solo texto).
+        alpha: Peso del texto (0=solo imagen, 1=solo texto) para la interpolación de embeddings.
 
     Returns:
         SearchResults.
@@ -623,7 +623,7 @@ def search_hybrid(
         FileNotFoundError: Si la imagen de consulta no se encuentra.
         ValueError: Si alpha es inválido o las entradas son incorrectas.
     """
-    logger.info(f"--- Performing Hybrid Search (Alpha={alpha}) ---")
+    logger.info(f"--- Performing Hybrid Search (Interpolated Embedding, Alpha={alpha}) ---")
     logger.info(f"  Text Query: '{query_text}'")
     logger.info(f"  Image Query Path: '{query_image_path}'")
     logger.info(f"  Using Vectorizer Model: {vectorizer.model_name}")
@@ -724,7 +724,7 @@ def search_hybrid(
         # results.query_vector = hybrid_embedding
         # ---
 
-        logger.info("--- Hybrid Search Finished ---")
+        logger.info("--- Hybrid Search (Interpolated Embedding) Finished ---")
         return results
 
     except (VectorizerError, DatabaseError, ImageProcessingError, FileNotFoundError, ValueError) as e:
@@ -733,3 +733,136 @@ def search_hybrid(
     except Exception as e:
         logger.error(f"Unexpected error during hybrid pipeline: {e}", exc_info=True)
         raise PipelineError(f"Unexpected hybrid search failure: {e}") from e
+
+
+# --- NEW: Hybrid Search (Reciprocal Rank Fusion - RRF) ---
+def search_hybrid_rrf(
+    query_text: str,
+    query_image_path: str,
+    vectorizer: Vectorizer,
+    db: VectorDBInterface,
+    n_results: int = DEFAULT_N_RESULTS,
+    truncate_dim: Optional[int] = None,
+    k_rrf: int = 60,  # Constant for RRF, as suggested in the PDF
+) -> SearchResults:
+    """
+    Performs hybrid search using Reciprocal Rank Fusion (RRF).
+
+    Executes separate text and image searches, then fuses the ranked lists using RRF.
+
+    Args:
+        query_text: Textual description.
+        query_image_path: Path to the example image.
+        vectorizer: Initialized Vectorizer instance.
+        db: Initialized VectorDBInterface instance.
+        n_results: Final number of results to return after fusion.
+        truncate_dim: Embedding dimension (optional).
+        k_rrf: Constant used in the RRF formula (default: 60).
+
+    Returns:
+        SearchResults containing the fused and re-ranked results.
+
+    Raises:
+        PipelineError: If search fails.
+        FileNotFoundError: If query image not found.
+        ValueError: If inputs are invalid.
+    """
+    logger.info(f"--- Performing Hybrid Search (Reciprocal Rank Fusion, k={k_rrf}) ---")
+    logger.info(f"  Text Query: '{query_text}'")
+    logger.info(f"  Image Query Path: '{query_image_path}'")
+    logger.info(f"  Using Vectorizer Model: {vectorizer.model_name}")
+    logger.info(f"  Target Embedding Dimension: {truncate_dim or 'Full'}")
+
+    # --- Input Validation (similar to search_hybrid) ---
+    if not query_text or not isinstance(query_text, str):
+        raise ValueError("Invalid query text provided.")
+    if not query_image_path or not isinstance(query_image_path, str):
+        raise ValueError("Invalid query image path provided.")
+    if not os.path.isfile(query_image_path):
+        raise FileNotFoundError(f"Query image file not found: {query_image_path}")
+    if not db.is_initialized or db.count() <= 0:
+        logger.warning("DB is empty or not initialized for RRF hybrid search.")
+        return SearchResults(items=[])
+    # --- End Validation ---
+
+    try:
+        # --- 1. Perform Independent Searches ---
+        # Fetch more results initially for better fusion overlap (e.g., 2*n_results)
+        fetch_n = max(n_results * 2, 20) # Fetch more for better ranking
+        logger.info(f"Performing independent text search (n_results={fetch_n})...")
+        text_results: SearchResults = search_by_text(
+            query_text=query_text,
+            vectorizer=vectorizer,
+            db=db,
+            n_results=fetch_n,
+            truncate_dim=truncate_dim,
+        )
+        logger.info(f"Text search yielded {text_results.count} results.")
+
+        logger.info(f"Performing independent image search (n_results={fetch_n})...")
+        image_results: SearchResults = search_by_image(
+            query_image_path=query_image_path,
+            vectorizer=vectorizer,
+            db=db,
+            n_results=fetch_n,
+            truncate_dim=truncate_dim,
+        )
+        logger.info(f"Image search yielded {image_results.count} results.")
+
+        # --- 2. Reciprocal Rank Fusion ---
+        logger.info(f"Fusing results using RRF (k={k_rrf})...")
+        rrf_scores: Dict[str, float] = {}
+        doc_metadata: Dict[str, Dict[str, Any]] = {} # Store metadata for final results
+
+        # Process text results
+        if not text_results.is_empty:
+            for rank, item in enumerate(text_results.items):
+                if item.id: # Ensure ID is valid
+                    score = 1.0 / (k_rrf + rank + 1) # Rank is 0-based
+                    rrf_scores[item.id] = rrf_scores.get(item.id, 0.0) + score
+                    if item.id not in doc_metadata:
+                         doc_metadata[item.id] = item.metadata or {} # Store metadata
+
+        # Process image results
+        if not image_results.is_empty:
+            for rank, item in enumerate(image_results.items):
+                 if item.id: # Ensure ID is valid
+                    score = 1.0 / (k_rrf + rank + 1) # Rank is 0-based
+                    rrf_scores[item.id] = rrf_scores.get(item.id, 0.0) + score
+                    if item.id not in doc_metadata:
+                         doc_metadata[item.id] = item.metadata or {} # Store metadata
+
+        # --- 3. Sort by RRF Score ---
+        if not rrf_scores:
+            logger.info("No results found from either text or image search for RRF.")
+            return SearchResults(items=[])
+
+        # Sort document IDs by their RRF score in descending order
+        sorted_ids = sorted(rrf_scores.keys(), key=lambda doc_id: rrf_scores[doc_id], reverse=True)
+
+        # --- 4. Construct Final Results ---
+        final_results_items: List[SearchResultItem] = []
+        for rank, doc_id in enumerate(sorted_ids[:n_results]): # Take top n_results
+            # Create SearchResultItem. Distance can represent the RRF score (higher is better)
+            # To make it behave like distance (lower is better), we can invert or negate.
+            # Using 1/score or max_score - score. Let's use RRF score directly for now,
+            # but note it's a similarity score, not distance.
+            # Or set distance=None and rely on order. Let's use RRF score as 'distance' for simplicity.
+            item = SearchResultItem(
+                id=doc_id,
+                distance=rrf_scores[doc_id], # Store RRF score here (higher=better)
+                metadata=doc_metadata.get(doc_id, {})
+            )
+            final_results_items.append(item)
+
+        logger.info(f"RRF fusion completed. Returning top {len(final_results_items)} results.")
+        logger.info("--- Hybrid Search (RRF) Finished ---")
+        # Note: query_vector is not applicable here as there isn't a single query vector
+        return SearchResults(items=final_results_items)
+
+    except (PipelineError, FileNotFoundError, ValueError) as e:
+        logger.error(f"Error during RRF hybrid search pipeline: {e}", exc_info=False)
+        raise PipelineError(f"RRF hybrid search failed: {e}") from e
+    except Exception as e:
+        logger.error(f"Unexpected error during RRF hybrid pipeline: {e}", exc_info=True)
+        raise PipelineError(f"Unexpected RRF hybrid search failure: {e}") from e
