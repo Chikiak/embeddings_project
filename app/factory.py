@@ -9,16 +9,19 @@ from app.exceptions import InitializationError
 
 logger = logging.getLogger(__name__)
 
-_vectorizer_instance: Vectorizer | None = None
-_db_instance: VectorDBInterface | None = None
+# Removed global cache variables, assuming Streamlit handles caching via st.cache_resource keyed by model_name
+# _vectorizer_instance: Vectorizer | None = None
+# _db_instance: VectorDBInterface | None = None
 
 
-def create_vectorizer(force_reload: bool = False) -> Vectorizer:
+def create_vectorizer(model_name: str, device: str, trust_remote_code: bool) -> Vectorizer:
     """
-    Crea o recupera una instancia cacheada de Vectorizer.
+    Crea una instancia de Vectorizer para un modelo específico.
 
     Args:
-        force_reload: Si es True, ignora la caché y crea una nueva instancia.
+        model_name: Nombre del modelo de Hugging Face a cargar.
+        device: Dispositivo para la inferencia ('cuda' o 'cpu').
+        trust_remote_code: Permitir código remoto del modelo.
 
     Returns:
         Una instancia de Vectorizer inicializada.
@@ -26,32 +29,33 @@ def create_vectorizer(force_reload: bool = False) -> Vectorizer:
     Raises:
         InitializationError: Si la inicialización del vectorizador falla.
     """
-    global _vectorizer_instance
-    if _vectorizer_instance is None or force_reload:
-        logger.info(
-            f"Creating Vectorizer instance (Model: {config.MODEL_NAME}, Device: {config.DEVICE})..."
+    logger.info(
+        f"Creating Vectorizer instance for model: {model_name} on device: {device}..."
+    )
+    try:
+        # Usa el model_name pasado como argumento
+        vectorizer_instance = Vectorizer(
+            model_name=model_name,
+            device=device,
+            trust_remote_code=trust_remote_code,
         )
-        try:
-            _vectorizer_instance = Vectorizer(
-                model_name=config.MODEL_NAME,
-                device=config.DEVICE,
-                trust_remote_code=config.TRUST_REMOTE_CODE,
-            )
-            logger.info("Vectorizer instance created successfully.")
-        except Exception as e:
-            logger.error(f"Failed to create Vectorizer instance: {e}", exc_info=True)
-            raise InitializationError(f"Vectorizer initialization failed: {e}") from e
-    else:
-        logger.debug("Returning cached Vectorizer instance.")
-    return _vectorizer_instance
+        logger.info(f"Vectorizer instance for {model_name} created successfully.")
+        return vectorizer_instance
+    except Exception as e:
+        logger.error(f"Failed to create Vectorizer instance for {model_name}: {e}", exc_info=True)
+        raise InitializationError(f"Vectorizer initialization failed for {model_name}: {e}") from e
 
 
 def create_vector_database(force_reload: bool = False) -> VectorDBInterface:
     """
-    Crea o recupera una instancia cacheada de VectorDatabase (actualmente ChromaDB).
+    Crea una instancia de VectorDatabase (actualmente ChromaDB).
+
+    Nota: Esta función ahora crea una nueva instancia cada vez que se llama,
+          a menos que se implemente una caché externa o se confíe en la caché de Streamlit
+          para la función que llama a esta (get_initialized_components).
 
     Args:
-        force_reload: Si es True, ignora la caché y crea una nueva instancia.
+        force_reload: (Actualmente no usado internamente aquí, pero mantenido por consistencia)
 
     Returns:
         Una instancia inicializada que cumple con VectorDBInterface.
@@ -59,37 +63,36 @@ def create_vector_database(force_reload: bool = False) -> VectorDBInterface:
     Raises:
         InitializationError: Si la inicialización de la base de datos falla.
     """
-    global _db_instance
-    if _db_instance is None or force_reload:
-        logger.info(
-            f"Creating VectorDatabase instance (Type: ChromaDB, Path: {config.CHROMA_DB_PATH}, Collection: {config.CHROMA_COLLECTION_NAME})..."
+    # No usa caché global _db_instance
+    logger.info(
+        f"Creating VectorDatabase instance (Type: ChromaDB, Path: {config.CHROMA_DB_PATH}, Collection: {config.CHROMA_COLLECTION_NAME})..."
+    )
+    try:
+        db_instance = ChromaVectorDB(
+            path=config.CHROMA_DB_PATH,
+            collection_name=config.CHROMA_COLLECTION_NAME,
         )
-        try:
-            _db_instance = ChromaVectorDB(
-                path=config.CHROMA_DB_PATH,
-                collection_name=config.CHROMA_COLLECTION_NAME,
-            )
-            logger.info("VectorDatabase instance (ChromaDB) created successfully.")
-        except Exception as e:
-            logger.error(
-                f"Failed to create VectorDatabase instance: {e}", exc_info=True
-            )
-            raise InitializationError(
-                f"VectorDatabase initialization failed: {e}"
-            ) from e
-    else:
-        logger.debug("Returning cached VectorDatabase instance.")
-    return _db_instance
+        logger.info("VectorDatabase instance (ChromaDB) created successfully.")
+        return db_instance
+    except Exception as e:
+        logger.error(
+            f"Failed to create VectorDatabase instance: {e}", exc_info=True
+        )
+        raise InitializationError(
+            f"VectorDatabase initialization failed: {e}"
+        ) from e
 
 
 def get_initialized_components(
-    force_reload: bool = False,
+    model_name: str, # Requiere el nombre del modelo
+    force_reload_db: bool = False, # Renombrado para claridad
 ) -> tuple[Vectorizer, VectorDBInterface]:
     """
-    Función de conveniencia para obtener ambos componentes inicializados.
+    Función de conveniencia para obtener ambos componentes inicializados para un MODELO específico.
 
     Args:
-        force_reload: Si es True, fuerza la recarga de ambos componentes.
+        model_name: El nombre del modelo de embedding a cargar.
+        force_reload_db: Si es True, fuerza la recarga de la base de datos.
 
     Returns:
         Una tupla que contiene (vectorizer, database) inicializados.
@@ -97,26 +100,32 @@ def get_initialized_components(
     Raises:
         InitializationError: Si la inicialización de cualquiera de los componentes falla.
     """
-    logger.info("Initializing application components...")
+    logger.info(f"Initializing application components for model: {model_name}...")
     start_time = time.time()
     try:
-        vectorizer = create_vectorizer(force_reload=force_reload)
-        db = create_vector_database(force_reload=force_reload)
+        # Llama a create_vectorizer con el model_name específico
+        vectorizer = create_vectorizer(
+            model_name=model_name,
+            device=config.DEVICE,
+            trust_remote_code=config.TRUST_REMOTE_CODE
+         )
+        # La creación de la BD no depende del modelo
+        db = create_vector_database(force_reload=force_reload_db)
         end_time = time.time()
         logger.info(
-            f"Components initialized successfully in {end_time - start_time:.2f} seconds."
+            f"Components for model {model_name} initialized successfully in {end_time - start_time:.2f} seconds."
         )
         return vectorizer, db
     except InitializationError as e:
         logger.critical(
-            f"Fatal error during component initialization: {e}", exc_info=True
+            f"Fatal error during component initialization for model {model_name}: {e}", exc_info=True
         )
         raise
     except Exception as e:
         logger.critical(
-            f"Unexpected fatal error during component initialization: {e}",
+            f"Unexpected fatal error during component initialization for model {model_name}: {e}",
             exc_info=True,
         )
         raise InitializationError(
-            f"Unexpected component initialization failure: {e}"
+            f"Unexpected component initialization failure for model {model_name}: {e}"
         ) from e

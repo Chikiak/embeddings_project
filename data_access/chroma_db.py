@@ -43,6 +43,7 @@ class ChromaVectorDB(VectorDBInterface):
         self.client: Optional[chromadb.ClientAPI] = None
         self.collection: Optional[Collection] = None
         self._client_initialized = False
+        self._last_init_error = None # Store last init error
 
         logger.info(f"Initializing ChromaVectorDB:")
         logger.info(f"  Storage Path: {os.path.abspath(self.path)}")
@@ -54,17 +55,27 @@ class ChromaVectorDB(VectorDBInterface):
         except OSError as e:
             msg = f"Error creating/accessing DB directory {self.path}: {e}"
             logger.error(msg, exc_info=True)
+            self._last_init_error = msg
             raise InitializationError(msg) from e
 
         try:
+            # Consider adding settings for timeout or other client parameters if needed
             self.client = chromadb.PersistentClient(path=self.path)
             logger.info("ChromaDB PersistentClient initialized.")
             self._client_initialized = True
-            self._ensure_collection_exists()
+            # Attempt to ensure collection exists immediately after client init
+            if not self._ensure_collection_exists():
+                 # If collection ensuring fails right away, it's an initialization error
+                 msg = f"Failed to get or create collection '{self.collection_name}' during initial setup."
+                 logger.error(msg)
+                 self._last_init_error = msg
+                 # Don't raise immediately, let is_initialized handle it, but log error
+                 # raise InitializationError(msg) # Optional: raise here if preferred
 
         except Exception as e:
             msg = f"Unexpected error initializing ChromaDB client: {e}"
             logger.error(msg, exc_info=True)
+            self._last_init_error = msg
             self._cleanup_client()
             raise InitializationError(msg) from e
 
@@ -88,50 +99,62 @@ class ChromaVectorDB(VectorDBInterface):
             logger.error("ChromaDB client not initialized. Cannot ensure collection.")
             return False
 
+        # If collection object exists, do a quick check (e.g., count) to see if it's still valid
         if self.collection is not None:
-            # Basic check: try to count. If it fails, collection might be invalid.
             try:
                 self.collection.count()
+                logger.debug(f"Collection '{self.collection_name}' object exists and count check passed.")
                 return True
             except Exception as e:
                 logger.warning(
-                    f"Collection object exists but failed check (e.g., count): {e}. Will try to get/create again."
+                    f"Collection object for '{self.collection_name}' exists but failed check (e.g., count): {e}. Will try to get/create again."
                 )
-                self.collection = None  # Reset collection object
+                self.collection = None  # Reset collection object as it seems invalid
 
+        # If collection object is None or was reset, try to get/create it
         logger.info(
             f"Attempting to ensure collection '{self.collection_name}' exists..."
         )
         try:
+            # Define metadata for cosine distance
+            # Note: Default is L2, explicitly set to cosine if needed.
+            # Jina models often use cosine similarity.
             metadata_options = {"hnsw:space": "cosine"}
             self.collection = self.client.get_or_create_collection(
                 name=self.collection_name,
                 metadata=metadata_options,
+                # embedding_function=None # Explicitly disable default embedding function if providing own embeddings
             )
-            collection_count = self.collection.count()
+            collection_count = self.collection.count() # Get count after ensuring
             logger.info(
                 f"Collection '{self.collection_name}' ensured/created. Current count: {collection_count}"
             )
             return True
         except InvalidDimensionException as e_dim:
+            # This might happen if trying to create with inconsistent dimensions over time
             logger.error(
                 f"Invalid dimension error ensuring collection '{self.collection_name}': {e_dim}",
                 exc_info=True,
             )
-            self.collection = None
+            self.collection = None # Ensure collection is None on error
             return False
         except Exception as e:
+            # Catch other potential errors during get_or_create_collection
             logger.error(
                 f"Unexpected error getting/creating collection '{self.collection_name}': {e}",
                 exc_info=True,
             )
-            self.collection = None
+            self.collection = None # Ensure collection is None on error
             return False
 
     @property
     def is_initialized(self) -> bool:
         """Verifica si el cliente está inicializado y la colección está accesible."""
-        return self._client_initialized and self._ensure_collection_exists()
+        # Check client first, then try to ensure collection exists
+        if not self._client_initialized:
+             return False
+        # Try to ensure collection exists, this will attempt creation if needed
+        return self._ensure_collection_exists()
 
     def add_embeddings(
         self,
@@ -141,22 +164,12 @@ class ChromaVectorDB(VectorDBInterface):
     ) -> bool:
         """
         Añade o actualiza embeddings en la colección ChromaDB.
-
-        Args:
-            ids: Lista de IDs únicos.
-            embeddings: Lista de vectores de embedding.
-            metadatas: Lista opcional de metadatos.
-
-        Returns:
-            True si la operación fue exitosa, False en caso contrario.
-
-        Raises:
-            DatabaseError: Si ocurre un error durante la operación upsert.
-            ValueError: Si las longitudes de las listas de entrada no coinciden
-                        o si las dimensiones de los embeddings son inconsistentes.
+        (Sin cambios lógicos significativos respecto a la versión anterior)
         """
         if not self.is_initialized or self.collection is None:
-            raise DatabaseError("Collection not available. Cannot add embeddings.")
+            # Attempt to re-ensure collection one last time before failing
+            if not self._ensure_collection_exists() or self.collection is None:
+                 raise DatabaseError("Collection not available. Cannot add embeddings.")
 
         if not isinstance(ids, list) or not isinstance(embeddings, list):
             raise ValueError("Invalid input type: ids and embeddings must be lists.")
@@ -173,27 +186,27 @@ class ChromaVectorDB(VectorDBInterface):
                     f"Metadata list mismatch or invalid type: IDs ({len(ids)}) vs metadatas ({len(metadatas) if isinstance(metadatas, list) else 'Invalid Type'})."
                 )
         else:
-            metadatas = [{} for _ in ids]
+            # Ensure metadatas is a list of dicts even if None provided
+            metadatas = [{} for _ in ids] # Create default empty dicts
 
-        # Initialize expected_dim before the if block
+        # Dimension check (optional but recommended)
         expected_dim: Optional[int] = None
-        if embeddings:
-            # Use the dimension from the first embedding for consistency check within the batch
+        if embeddings and embeddings[0]:
             expected_dim = len(embeddings[0])
-            # Check against config dimension if it's set
-            if VECTOR_DIMENSION and expected_dim != VECTOR_DIMENSION:
-                logger.warning(
-                    f"Provided embedding dimension ({expected_dim}) differs from config ({VECTOR_DIMENSION}). Ensure consistency."
-                )
+            # Check against config dimension if it's set (can be None)
+            # if VECTOR_DIMENSION and expected_dim != VECTOR_DIMENSION:
+            #     logger.warning(
+            #         f"Provided embedding dimension ({expected_dim}) differs from config ({VECTOR_DIMENSION}). Ensure consistency."
+            #     )
             # Check consistency within the batch
-            if not all(len(emb) == expected_dim for emb in embeddings):
+            if not all(len(emb) == expected_dim for emb in embeddings if emb is not None):
                 inconsistent_dims = [
                     (i, len(emb))
                     for i, emb in enumerate(embeddings)
-                    if len(emb) != expected_dim
+                    if emb is not None and len(emb) != expected_dim
                 ]
                 logger.error(
-                    f"Inconsistent embedding dimensions found in batch. Expected {expected_dim}, found: {inconsistent_dims[:5]}"
+                    f"Inconsistent embedding dimensions found in batch. Expected {expected_dim}, found examples: {inconsistent_dims[:5]}"
                 )
                 raise ValueError("Inconsistent embedding dimensions found in batch.")
 
@@ -202,18 +215,17 @@ class ChromaVectorDB(VectorDBInterface):
             f"Attempting to add/update {num_items_to_add} embeddings in collection '{self.collection_name}'..."
         )
         try:
+            # Upsert handles both add and update based on ID
             self.collection.upsert(ids=ids, embeddings=embeddings, metadatas=metadatas)
             logger.info(f"Upsert for {num_items_to_add} items completed.")
             return True
         except InvalidDimensionException as e_dim:
-            # Use the expected_dim variable safely here
-            dim_info = (
-                f"Provided: {expected_dim if expected_dim is not None else 'N/A'}"
-            )
-            msg = f"ChromaDB upsert error: Invalid dimension. {dim_info}, Config: {VECTOR_DIMENSION}. Details: {e_dim}"
+            dim_info = f"Provided batch dim: {expected_dim if expected_dim is not None else 'N/A'}"
+            msg = f"ChromaDB upsert error: Invalid dimension. {dim_info}. Details: {e_dim}"
             logger.error(msg, exc_info=True)
             raise DatabaseError(msg) from e_dim
         except Exception as e:
+            # Catch other potential ChromaDB errors during upsert
             msg = f"Error during upsert operation in collection '{self.collection_name}': {e}"
             logger.error(msg, exc_info=True)
             raise DatabaseError(msg) from e
@@ -223,20 +235,12 @@ class ChromaVectorDB(VectorDBInterface):
     ) -> Optional[SearchResults]:
         """
         Consulta ChromaDB por embeddings similares y devuelve SearchResults.
-
-        Args:
-            query_embedding: El vector de embedding para la consulta.
-            n_results: Número máximo de resultados.
-
-        Returns:
-            Un objeto SearchResults o None si la consulta falla.
-
-        Raises:
-            DatabaseError: Si ocurre un error durante la consulta.
-            ValueError: Si query_embedding es inválido.
+        (Sin cambios lógicos significativos respecto a la versión anterior)
         """
         if not self.is_initialized or self.collection is None:
-            raise DatabaseError("Collection not available. Cannot query.")
+             # Attempt to re-ensure collection one last time before failing
+            if not self._ensure_collection_exists() or self.collection is None:
+                raise DatabaseError("Collection not available. Cannot query.")
 
         if not query_embedding or not isinstance(query_embedding, list):
             raise ValueError("Invalid query embedding (must be a list of floats).")
@@ -246,12 +250,14 @@ class ChromaVectorDB(VectorDBInterface):
             logger.warning("Query attempted on an empty collection.")
             return SearchResults(items=[])
         if current_count == -1:
+            # Count failed, implies DB issue
             raise DatabaseError("Cannot query, failed to get collection count.")
 
+        # Ensure n_results is not greater than the number of items in the collection
         effective_n_results = min(n_results, current_count)
         if effective_n_results <= 0:
             logger.warning(
-                f"Effective n_results is {effective_n_results}. Returning empty results."
+                f"Effective n_results is {effective_n_results} (requested: {n_results}, count: {current_count}). Returning empty results."
             )
             return SearchResults(items=[])
 
@@ -260,81 +266,64 @@ class ChromaVectorDB(VectorDBInterface):
         )
         try:
             start_time = time.time()
+            # Query the collection
             results_dict = self.collection.query(
                 query_embeddings=[query_embedding],
                 n_results=effective_n_results,
-                include=["metadatas", "distances"],
+                include=["metadatas", "distances"], # Request distances and metadatas
             )
             end_time = time.time()
             logger.info(f"ChromaDB query executed in {end_time - start_time:.3f}s.")
 
+            # Process results
             result_items = []
+            # Check if the dictionary and required keys/sublists exist and are not None
             if (
                 results_dict
-                and all(
-                    key in results_dict for key in ["ids", "distances", "metadatas"]
-                )
-                and results_dict["ids"]
-                and results_dict["ids"][0] is not None  # Check inner list is not None
+                and results_dict.get("ids") is not None
+                and results_dict.get("distances") is not None
+                and results_dict.get("metadatas") is not None
+                and results_dict["ids"] # Check if the outer list exists
+                and results_dict["ids"][0] is not None # Check if the inner list for the first query exists
             ):
                 ids_list = results_dict["ids"][0]
-                # Handle cases where distances or metadatas might be None or empty lists
-                distances_list = (
-                    results_dict.get("distances", [[]])[0]
-                    if results_dict.get("distances")
-                    else [None] * len(ids_list)
-                )
-                metadatas_list = (
-                    results_dict.get("metadatas", [[]])[0]
-                    if results_dict.get("metadatas")
-                    else [{}] * len(ids_list)
-                )
+                distances_list = results_dict["distances"][0]
+                metadatas_list = results_dict["metadatas"][0]
 
-                # Ensure all lists have the same length as ids_list
-                if len(distances_list) != len(ids_list):
-                    logger.warning(
-                        f"Distance list length ({len(distances_list)}) mismatch with ID list length ({len(ids_list)}). Padding distances with None."
-                    )
-                    distances_list = [None] * len(ids_list)
-                if len(metadatas_list) != len(ids_list):
-                    logger.warning(
-                        f"Metadata list length ({len(metadatas_list)}) mismatch with ID list length ({len(ids_list)}). Padding metadatas with {{}}."
-                    )
-                    metadatas_list = [{}] * len(ids_list)
+                # Basic sanity check for length consistency
+                if not (len(ids_list) == len(distances_list) == len(metadatas_list)):
+                     logger.warning(f"Query result lists length mismatch! IDs:{len(ids_list)}, Dist:{len(distances_list)}, Meta:{len(metadatas_list)}. Trying to proceed cautiously.")
+                     # Attempt to proceed using the length of IDs as reference, might lead to errors if lists are truly mismatched
+                     min_len = len(ids_list)
+                     distances_list = distances_list[:min_len]
+                     metadatas_list = metadatas_list[:min_len]
+
 
                 for i, img_id in enumerate(ids_list):
+                    # Ensure metadata is a dict, default to empty if None
+                    metadata = metadatas_list[i] if metadatas_list[i] is not None else {}
                     item = SearchResultItem(
                         id=img_id,
-                        distance=distances_list[i],
-                        metadata=(
-                            metadatas_list[i] if metadatas_list[i] is not None else {}
-                        ),
+                        distance=distances_list[i], # Distance can be None if not calculated
+                        metadata=metadata,
                     )
                     result_items.append(item)
+
                 logger.info(f"Query successful. Found {len(result_items)} results.")
                 return SearchResults(items=result_items, query_vector=query_embedding)
             else:
-                logger.info("Query successful, but no matching documents found.")
+                # Handle cases where results are empty or structure is unexpected
+                logger.info("Query successful, but no matching documents found or result format unexpected.")
+                logger.debug(f"Raw query result from ChromaDB: {results_dict}")
                 return SearchResults(items=[], query_vector=query_embedding)
 
         except InvalidDimensionException as e_dim:
-            # Provide more context in the error message
             query_dim = len(query_embedding)
-            # Try to get collection dimension (might fail if collection is invalid)
-            collection_dim_info = "unknown"
-            try:
-                if self.collection:
-                    # This might be specific to Chroma's implementation details
-                    # or might require fetching an item if metadata isn't available
-                    # For now, we'll just report the query dimension clearly.
-                    pass  # Placeholder if we find a way to get expected dim
-            except Exception:
-                pass  # Ignore errors getting collection dim info
-
-            msg = f"ChromaDB query error: Invalid dimension. Query Dim: {query_dim}, Collection Dim: {collection_dim_info}. Details: {e_dim}"
+            msg = f"ChromaDB query error: Invalid dimension. Query Dim: {query_dim}. Details: {e_dim}"
             logger.error(msg, exc_info=True)
             raise DatabaseError(msg) from e_dim
         except Exception as e:
+            # Catch other potential errors during query
             msg = f"Error during query operation in collection '{self.collection_name}': {e}"
             logger.error(msg, exc_info=True)
             raise DatabaseError(msg) from e
@@ -350,14 +339,31 @@ class ChromaVectorDB(VectorDBInterface):
 
         Returns:
             Tupla (lista_ids, array_embeddings) o None si falla.
+            Devuelve ([], np.empty(0, ...)) si la colección está vacía.
 
         Raises:
             DatabaseError: Si ocurre un error durante la recuperación.
         """
         if not self.is_initialized or self.collection is None:
-            raise DatabaseError("Collection not available. Cannot get all embeddings.")
+             # Attempt to re-ensure collection one last time before failing
+            if not self._ensure_collection_exists() or self.collection is None:
+                raise DatabaseError("Collection not available. Cannot get all embeddings.")
 
-        fallback_dim = VECTOR_DIMENSION if isinstance(VECTOR_DIMENSION, int) else 1
+        # Determine fallback dimension for empty array
+        fallback_dim = 1 # Default fallback
+        try:
+            # Try to get dimension from collection metadata if possible (might not be reliable)
+            # Or use config if set
+            if VECTOR_DIMENSION:
+                fallback_dim = VECTOR_DIMENSION
+            # else: # Attempt to get from collection (less reliable)
+            #    if self.collection and self.collection.metadata:
+            #         # Chroma might store dimension info, check its API/metadata structure
+            #         pass
+        except Exception:
+            logger.warning("Could not determine precise fallback dimension, using 1.")
+
+
         empty_result: Tuple[List[str], np.ndarray] = (
             [],
             np.empty((0, fallback_dim), dtype=np.float32),
@@ -369,9 +375,7 @@ class ChromaVectorDB(VectorDBInterface):
                 logger.info("Collection is empty. Returning empty lists/arrays.")
                 return empty_result
             if count == -1:
-                raise DatabaseError(
-                    "Failed to get collection count before retrieving all."
-                )
+                raise DatabaseError("Failed to get collection count before retrieving all.")
 
             logger.info(
                 f"Retrieving all {count} embeddings and IDs from '{self.collection_name}' using pagination (batch size: {pagination_batch_size})..."
@@ -381,118 +385,128 @@ class ChromaVectorDB(VectorDBInterface):
             all_ids = []
             all_embeddings_list = []
             retrieved_count = 0
-            actual_embedding_dim = (
-                None  # To store the dimension found in the first batch
-            )
+            actual_embedding_dim = None # To store the dimension found in the first batch
 
             while retrieved_count < count:
-                logger.debug(
-                    f"Retrieving batch offset={retrieved_count}, limit={pagination_batch_size}"
-                )
+                offset = retrieved_count
+                limit = min(pagination_batch_size, count - retrieved_count)
+                logger.debug(f"Retrieving batch offset={offset}, limit={limit}")
+
                 try:
+                    # Get data including embeddings
                     results = self.collection.get(
-                        limit=pagination_batch_size,
-                        offset=retrieved_count,
-                        include=["embeddings"],
+                        limit=limit,
+                        offset=offset,
+                        include=["embeddings"], # Only need embeddings here
                     )
 
+                    # --- Robust check for results ---
                     if (
-                        results
-                        and results.get("ids")
-                        and results.get("embeddings") is not None
+                        results is not None and
+                        results.get("ids") is not None and
+                        results.get("embeddings") is not None and
+                        # Ensure the lists themselves are not None and have content
+                        isinstance(results["ids"], list) and
+                        isinstance(results["embeddings"], list) and
+                        len(results["ids"]) > 0 # Check if any IDs were returned in this batch
                     ):
                         batch_ids = results["ids"]
                         batch_embeddings = results["embeddings"]
 
-                        if not batch_ids:  # Should not happen if count > 0, but check
-                            logger.warning(
-                                f"Empty batch retrieved at offset {retrieved_count} despite count={count}. Stopping."
-                            )
-                            break
+                        # Check consistency between IDs and embeddings length in the batch
+                        if len(batch_ids) != len(batch_embeddings):
+                             logger.error(f"CRITICAL BATCH MISMATCH at offset {offset}: IDs ({len(batch_ids)}) vs Embeddings ({len(batch_embeddings)}). Stopping retrieval.")
+                             raise DatabaseError(f"Batch length mismatch at offset {offset}.")
 
-                        if batch_embeddings and actual_embedding_dim is None:
-                            # Store the dimension from the first non-empty embedding list
-                            if batch_embeddings[0] is not None:
-                                actual_embedding_dim = len(batch_embeddings[0])
-                                logger.info(
-                                    f"Detected embedding dimension from data: {actual_embedding_dim}"
-                                )
+                        # Store the dimension from the first valid embedding found
+                        if actual_embedding_dim is None:
+                            for emb in batch_embeddings:
+                                if emb is not None and isinstance(emb, list):
+                                    actual_embedding_dim = len(emb)
+                                    logger.info(f"Detected embedding dimension from data: {actual_embedding_dim}")
+                                    break # Found the dimension
 
+                        # Add batch data to overall lists
                         all_ids.extend(batch_ids)
                         all_embeddings_list.extend(batch_embeddings)
                         retrieved_count += len(batch_ids)
-                        logger.debug(
-                            f"Retrieved {len(batch_ids)} items. Total retrieved: {retrieved_count}/{count}"
-                        )
+                        logger.debug(f"Retrieved {len(batch_ids)} items. Total retrieved: {retrieved_count}/{count}")
+
+                    elif results is not None and results.get("ids") is not None and len(results["ids"]) == 0:
+                         # Empty batch returned, maybe end of collection reached unexpectedly?
+                         logger.warning(f"Empty batch retrieved at offset {offset} despite count={count}. Stopping.")
+                         break
                     else:
-                        # Handle case where results might be missing keys or embeddings are None
+                        # Handle unexpected result format or missing keys
                         logger.warning(
-                            f"Unexpected result format or empty batch content at offset {retrieved_count}. Stopping. Result keys: {results.keys() if results else 'None'}"
+                            f"Unexpected result format or empty batch content at offset {offset}. Stopping. Result keys: {results.keys() if results else 'None'}"
                         )
-                        break
+                        break # Stop processing if format is wrong
                 except Exception as e_get:
-                    raise DatabaseError(
-                        f"Error retrieving batch at offset {retrieved_count}: {e_get}"
-                    ) from e_get
+                    # Catch errors during the .get() call itself
+                    raise DatabaseError(f"Error retrieving batch at offset {offset}: {e_get}") from e_get
 
             end_time = time.time()
             logger.info(
                 f"Data retrieval finished in {end_time - start_time:.2f}s. Retrieved {retrieved_count} items."
             )
 
+            # Final consistency checks
             if len(all_ids) != len(all_embeddings_list):
+                # This should ideally be caught by the batch check, but double-check
                 raise DatabaseError(
-                    f"CRITICAL: Mismatch after pagination: IDs ({len(all_ids)}) vs Embeddings ({len(all_embeddings_list)})."
+                    f"CRITICAL: Final mismatch after pagination: IDs ({len(all_ids)}) vs Embeddings ({len(all_embeddings_list)})."
                 )
-            if retrieved_count != count:
+            if retrieved_count != count and retrieved_count < count:
+                # Log if we didn't retrieve the expected number of items
                 logger.warning(
-                    f"Final retrieved count ({retrieved_count}) differs from initial count ({count}). Data might have changed."
+                    f"Final retrieved count ({retrieved_count}) is less than initial count ({count}). Data might have changed or retrieval stopped early."
                 )
 
+            # --- Convert to NumPy array ---
             try:
                 if not all_embeddings_list:
                     logger.warning("Embeddings list is empty after retrieval loop.")
                     # Use detected dimension if available, otherwise fallback
-                    final_dim = (
-                        actual_embedding_dim
-                        if actual_embedding_dim is not None
-                        else fallback_dim
-                    )
+                    final_dim = actual_embedding_dim if actual_embedding_dim is not None else fallback_dim
                     return ([], np.empty((0, final_dim), dtype=np.float32))
 
                 # Filter out potential None embeddings before converting to array
-                valid_embeddings = [
-                    emb for emb in all_embeddings_list if emb is not None
-                ]
-                num_filtered = len(all_embeddings_list) - len(valid_embeddings)
-                if num_filtered > 0:
+                # Keep track of corresponding IDs
+                valid_ids = []
+                valid_embeddings = []
+                none_count = 0
+                for i, emb in enumerate(all_embeddings_list):
+                    if emb is not None and isinstance(emb, list):
+                         # Optional: Check dimension consistency again here if needed
+                         # if actual_embedding_dim and len(emb) != actual_embedding_dim:
+                         #    logger.warning(f"Skipping embedding at index {i} due to dimension mismatch.")
+                         #    continue
+                         valid_embeddings.append(emb)
+                         valid_ids.append(all_ids[i])
+                    else:
+                         none_count += 1
+                         logger.debug(f"Found None embedding for ID: {all_ids[i]} at index {i}")
+
+                if none_count > 0:
                     logger.warning(
-                        f"Filtered out {num_filtered} None embeddings before creating NumPy array."
+                        f"Filtered out {none_count} None embeddings before creating NumPy array. Returning {len(valid_ids)} valid items."
                     )
-                    # Adjust IDs accordingly? This is complex. Assuming IDs correspond to original list.
-                    # For simplicity, we'll proceed with valid embeddings but log the discrepancy potential.
-                    # A more robust solution might involve returning IDs corresponding only to valid embeddings.
 
                 if not valid_embeddings:
-                    logger.warning(
-                        "No valid embeddings found after filtering None values."
-                    )
-                    final_dim = (
-                        actual_embedding_dim
-                        if actual_embedding_dim is not None
-                        else fallback_dim
-                    )
+                    logger.warning("No valid embeddings found after filtering None values.")
+                    final_dim = actual_embedding_dim if actual_embedding_dim is not None else fallback_dim
                     return ([], np.empty((0, final_dim), dtype=np.float32))
 
+                # Convert the list of valid embeddings to a NumPy array
                 embeddings_array = np.array(valid_embeddings, dtype=np.float32)
-                # Note: all_ids still corresponds to the original list including potential Nones
+
                 logger.info(
-                    f"Successfully retrieved {len(all_ids)} IDs and created embeddings array of shape {embeddings_array.shape} from {len(valid_embeddings)} valid embeddings."
+                    f"Successfully retrieved {len(valid_ids)} valid ID/embedding pairs. Embeddings array shape: {embeddings_array.shape}."
                 )
-                return (
-                    all_ids,
-                    embeddings_array,
-                )  # Returning all original IDs, but array only has valid embeddings
+                # Return only the IDs corresponding to the valid embeddings
+                return (valid_ids, embeddings_array)
+
             except ValueError as ve:
                 # This might happen if embeddings within valid_embeddings still have inconsistent lengths
                 logger.error(
@@ -506,29 +520,28 @@ class ChromaVectorDB(VectorDBInterface):
         except Exception as e:
             msg = f"Error retrieving all embeddings from collection '{self.collection_name}': {e}"
             logger.error(msg, exc_info=True)
+            # Ensure DatabaseError is raised for consistency
             if not isinstance(e, DatabaseError):
                 raise DatabaseError(msg) from e
             else:
-                raise e
+                raise e # Re-raise if it's already a DatabaseError
 
     def clear_collection(self) -> bool:
         """
         Elimina todos los ítems de la colección ChromaDB.
-
-        Returns:
-            True si la operación fue exitosa, False en caso contrario.
-
-        Raises:
-            DatabaseError: Si ocurre un error durante la limpieza.
+        (Sin cambios lógicos significativos respecto a la versión anterior)
         """
         if not self.is_initialized or self.collection is None:
-            raise DatabaseError("Collection not available. Cannot clear.")
+             # Attempt to re-ensure collection one last time before failing
+            if not self._ensure_collection_exists() or self.collection is None:
+                raise DatabaseError("Collection not available. Cannot clear.")
         try:
             count_before = self.count()
             if count_before == 0:
                 logger.info(f"Collection '{self.collection_name}' is already empty.")
                 return True
             if count_before == -1:
+                # Count failed, implies DB issue
                 raise DatabaseError("Cannot clear collection, failed to get count.")
 
             logger.warning(
@@ -536,7 +549,16 @@ class ChromaVectorDB(VectorDBInterface):
             )
             start_time = time.time()
             # Chroma's delete without IDs/where filter deletes all items
-            self.collection.delete()
+            # This might require fetching all IDs first if `delete()` without args is deprecated or removed
+            # Check ChromaDB documentation for the current way to delete all items.
+            # Assuming `delete()` without args works for now. If not, replace with:
+            # all_data = self.collection.get() # Get all IDs
+            # if all_data and all_data.get('ids'):
+            #     self.collection.delete(ids=all_data['ids'])
+            # else: # Handle empty collection or error getting IDs
+            #     logger.info("Collection already empty or failed to get IDs for clearing.")
+            #     return True # Or False depending on desired behavior
+            self.collection.delete() # Assumes delete() without args clears the collection
             end_time = time.time()
 
             # Verify deletion by checking count again
@@ -561,12 +583,7 @@ class ChromaVectorDB(VectorDBInterface):
     def delete_collection(self) -> bool:
         """
         Elimina toda la colección ChromaDB.
-
-        Returns:
-            True si la operación fue exitosa, False en caso contrario.
-
-        Raises:
-            DatabaseError: Si ocurre un error durante la eliminación.
+        (Sin cambios lógicos significativos respecto a la versión anterior)
         """
         if not self._client_initialized or self.client is None:
             raise DatabaseError("Client not initialized. Cannot delete collection.")
@@ -578,6 +595,7 @@ class ChromaVectorDB(VectorDBInterface):
         )
         try:
             start_time = time.time()
+            # Call the client's delete_collection method
             self.client.delete_collection(name=self.collection_name)
             end_time = time.time()
             logger.info(
@@ -585,26 +603,23 @@ class ChromaVectorDB(VectorDBInterface):
             )
             # Reset internal state as the collection object is now invalid
             self.collection = None
-            # Verify deletion by trying to get the collection (should fail)
+            # Verification (optional but good practice): Try to get the collection, expect an error
             try:
                 self.client.get_collection(name=self.collection_name)
-                # If get_collection succeeds, deletion might have failed silently
+                # If get_collection succeeds, deletion might have failed silently or is async
                 logger.error(
                     f"Verification failed: Collection '{self.collection_name}' still exists after delete request."
                 )
-                raise DatabaseError(
-                    f"Collection '{self.collection_name}' still exists after delete request."
-                )
-            except (
-                Exception
-            ):  # Expecting an error here, like ValueError or specific Chroma error
-                logger.info(
-                    f"Verification successful: Collection '{self.collection_name}' no longer exists."
-                )
+                # Consider raising an error or returning False if verification fails
+                # raise DatabaseError(f"Collection '{self.collection_name}' still exists after delete request.")
+                return False # Indicate potential failure if collection still exists
+            except Exception as get_err:
+                # Expecting an error here (e.g., ValueError in older chromadb, maybe specific error in newer)
+                logger.info(f"Verification successful: Collection '{self.collection_name}' no longer exists (get failed: {get_err}).")
                 return True
 
-        # Removed the specific CollectionNotFoundError catch block
         except Exception as e:
+            # Catch errors during the delete_collection call itself
             msg = f"Error deleting collection '{self.collection_name}': {e}"
             logger.error(msg, exc_info=True)
             raise DatabaseError(msg) from e
@@ -618,21 +633,24 @@ class ChromaVectorDB(VectorDBInterface):
              si ocurre un error durante el conteo.
         """
         # Use is_initialized which includes _ensure_collection_exists
+        # This attempts to recreate the collection object if it became invalid
         if not self.is_initialized or self.collection is None:
             logger.warning(
                 "Count requested but collection is not available or initialization failed."
             )
             return -1
         try:
-            return self.collection.count()
+            # Get the count from the collection object
+            count = self.collection.count()
+            logger.debug(f"Collection '{self.collection_name}' count: {count}")
+            return count
         except Exception as e:
             # This might happen if the collection becomes invalid between checks
             logger.error(
                 f"Error getting count for collection '{self.collection_name}': {e}",
                 exc_info=True,
             )
-            # Attempt to reset and re-ensure collection state
-            self.collection = None
-            if not self._ensure_collection_exists():
-                logger.error("Failed to re-ensure collection after count error.")
+            # Attempt to reset and re-ensure collection state might be complex here
+            # Simply returning -1 indicates an error occurred
+            self.collection = None # Reset collection object as it's likely invalid
             return -1
