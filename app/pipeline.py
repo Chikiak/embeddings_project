@@ -36,6 +36,7 @@ def _process_batch_for_indexing(
     Procesa un único lote de rutas de imágenes para la indexación.
 
     Carga, vectoriza y añade embeddings válidos a la base de datos.
+    Utiliza rutas absolutas como IDs.
 
     Args:
         batch_paths: Lista de rutas de imágenes en el lote.
@@ -95,9 +96,19 @@ def _process_batch_for_indexing(
         for idx, embedding in enumerate(embedding_results):
             original_path = loaded_paths[idx]
             if embedding is not None and isinstance(embedding, list):
+                # --- CAMBIO CLAVE AQUÍ ---
+                # Convierte la ruta original a absoluta ANTES de usarla como ID
+                absolute_path_id = os.path.abspath(original_path)
+                logger.debug(f"Using absolute path as ID: '{absolute_path_id}' (Original: '{original_path}')")
+                # ------------------------
+
                 valid_embeddings.append(embedding)
-                valid_ids.append(original_path)
-                valid_metadatas.append({"source_path": original_path})
+                valid_ids.append(absolute_path_id) # Almacena la ruta absoluta como ID
+                # Guarda ambas rutas en metadatos para referencia (opcional pero útil)
+                valid_metadatas.append({
+                    "source_path": original_path,     # La ruta original tal como se encontró
+                    "absolute_path": absolute_path_id # La ruta absoluta usada como ID
+                })
             else:
                 num_failed_vec_in_batch += 1
                 logger.warning(
@@ -111,7 +122,7 @@ def _process_batch_for_indexing(
 
         if valid_ids:
             logger.info(
-                f"{batch_num_info}: Adding {num_vectorized} valid embeddings to the database..."
+                f"{batch_num_info}: Adding {num_vectorized} valid embeddings (using absolute paths as IDs) to the database..."
             )
             # Usa la instancia de db proporcionada
             success = db.add_embeddings(
@@ -165,6 +176,7 @@ def process_directory(
     Procesa imágenes en un directorio: encuentra, vectoriza y almacena embeddings.
 
     Utiliza instancias específicas de Vectorizer y VectorDBInterface.
+    Almacena rutas absolutas como IDs.
 
     Args:
         directory_path: Ruta al directorio que contiene las imágenes.
@@ -190,6 +202,7 @@ def process_directory(
     logger.info(f"  Using Vectorizer Model: {vectorizer.model_name}")
     logger.info(f"  Target Embedding Dimension: {truncate_dim or 'Full'}")
     logger.info(f"  Processing Batch Size: {batch_size}")
+    logger.info(f"  Storing Absolute Paths as IDs: True") # Log the change
 
 
     if not db.is_initialized:
@@ -425,7 +438,7 @@ def search_by_image(
     """
     Busca imágenes similares a una imagen de consulta dada usando VectorDBInterface.
 
-    Filtra la propia imagen de consulta de los resultados si se encuentra.
+    Filtra la propia imagen de consulta de los resultados si se encuentra (usando rutas absolutas).
 
     Args:
         query_image_path: Ruta al archivo de imagen de consulta.
@@ -505,14 +518,22 @@ def search_by_image(
             logger.info(
                 f"Search successful. Found {initial_results.count} potential results (before filtering)."
             )
-            # Normalize paths for robust comparison
+            # --- CAMBIO: Usa rutas absolutas para la comparación ---
             normalized_query_path = os.path.abspath(query_image_path)
+            logger.debug(f"Normalized query path for filtering: '{normalized_query_path}'")
+            # -------------------------------------------------------
 
             for item in initial_results.items:
                 # Ensure item.id is a valid path before normalizing
                 if item.id and isinstance(item.id, str):
                     try:
-                        normalized_result_path = os.path.abspath(item.id)
+                        # --- CAMBIO: Normaliza la ruta del resultado (esperando que sea absoluta) ---
+                        # Asume que los IDs almacenados son ahora absolutos
+                        normalized_result_path = item.id # No necesita abspath si ya es absoluto
+                        # Si aún pudieran existir rutas relativas (durante transición), usar abspath:
+                        # normalized_result_path = os.path.abspath(item.id)
+                        # --------------------------------------------------------------------------
+
                         # Check for exact path match AND very small distance (cosine distance ~0 for identical vectors)
                         is_exact_match = (normalized_result_path == normalized_query_path) and (
                             item.distance is not None and item.distance < 1e-6
@@ -570,7 +591,7 @@ def search_by_image(
     return results_to_return
 
 
-# --- NEW: Hybrid Search ---
+# --- Hybrid Search ---
 def search_hybrid(
     query_text: str,
     query_image_path: str,
