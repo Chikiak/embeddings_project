@@ -1,22 +1,20 @@
-﻿import os
+﻿import argparse
+import logging
+import os
 import sys
 import time
-import argparse
-import logging
 
-# --- Initial Setup and Path Configuration ---
 project_root = os.path.dirname(os.path.abspath(__file__))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-# --- Import necessary components AFTER potentially modifying sys.path ---
-import config
-from app.factory import get_initialized_components
-from app import cli_handlers
-from app.logging_config import setup_logging
-from app.exceptions import InitializationError
 
-# --- Configure Logging ---
+import config
+from app import cli_handlers
+from app.exceptions import InitializationError
+from app.factory import get_initialized_components
+from app.logging_config import setup_logging
+
 setup_logging()
 logger = logging.getLogger(__name__)
 
@@ -131,7 +129,8 @@ def main():
         return
     except Exception as e:
         logger.critical(
-            f"Unexpected error during initialization: {e}. Exiting.", exc_info=True
+            f"Unexpected error during initialization: {e}. Exiting.",
+            exc_info=True,
         )
         return
 
@@ -157,7 +156,9 @@ def main():
         cli_handlers.handle_image_search(args, vectorizer, db)
 
     end_time = time.time()
-    logger.info(f"\n--- Total Execution Time: {end_time - start_time:.2f} seconds ---")
+    logger.info(
+        f"\n--- Total Execution Time: {end_time - start_time:.2f} seconds ---"
+    )
 
 
 if __name__ == "__main__":

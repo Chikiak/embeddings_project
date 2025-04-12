@@ -1,22 +1,25 @@
-﻿# data_access/vector_db_interface.py
-from abc import ABC, abstractmethod
-from typing import List, Dict, Optional, Any, Tuple
-from typing import Union
+﻿from abc import ABC, abstractmethod
+from typing import Any, Dict, List, Optional, Tuple, Union
+
 import numpy as np
 
-# Assuming app.models is accessible
 try:
     from app.models import SearchResults
 except ImportError:
-    # Define a placeholder if running standalone or models not found
+
     class SearchResults:
         def __init__(self, items=None, query_vector=None):
             self.items = items if items is not None else []
             self.query_vector = query_vector
+
         @property
-        def count(self): return len(self.items)
+        def count(self):
+            return len(self.items)
+
         @property
-        def is_empty(self): return not self.items
+        def is_empty(self):
+            return not self.items
+
 
 class VectorDBInterface(ABC):
     """
@@ -49,7 +52,6 @@ class VectorDBInterface(ABC):
             DatabaseError: If an error occurs during the operation.
             ValueError: If input lists have mismatched lengths or invalid types.
         """
-        pass
 
     @abstractmethod
     def query_similar(
@@ -71,7 +73,6 @@ class VectorDBInterface(ABC):
             DatabaseError: If an error occurs during the query.
             ValueError: If the query embedding is invalid.
         """
-        pass
 
     @abstractmethod
     def get_all_embeddings_with_ids(
@@ -97,9 +98,7 @@ class VectorDBInterface(ABC):
         Raises:
             DatabaseError: If an error occurs during retrieval.
         """
-        pass
 
-    # --- NEW Abstract Method ---
     @abstractmethod
     def get_embeddings_by_ids(
         self, ids: List[str]
@@ -120,9 +119,7 @@ class VectorDBInterface(ABC):
             DatabaseError: If a database error occurs during retrieval.
             ValueError: If the input ID list is invalid.
         """
-        pass
 
-    # --- NEW Abstract Method ---
     @abstractmethod
     def update_metadata_batch(
         self, ids: List[str], metadatas: List[Dict[str, Any]]
@@ -146,8 +143,6 @@ class VectorDBInterface(ABC):
             DatabaseError: If a database error occurs during the update.
             ValueError: If input lists have mismatched lengths or invalid types.
         """
-        pass
-
 
     @abstractmethod
     def clear_collection(self) -> bool:
@@ -160,7 +155,6 @@ class VectorDBInterface(ABC):
         Raises:
             DatabaseError: If an error occurs during the operation.
         """
-        pass
 
     @abstractmethod
     def delete_collection(self) -> bool:
@@ -173,7 +167,6 @@ class VectorDBInterface(ABC):
         Raises:
             DatabaseError: If an error occurs during deletion.
         """
-        pass
 
     @abstractmethod
     def count(self) -> int:
@@ -183,7 +176,6 @@ class VectorDBInterface(ABC):
         Returns:
             The number of items, or -1 if an error occurs during counting.
         """
-        pass
 
     @property
     @abstractmethod
@@ -194,7 +186,6 @@ class VectorDBInterface(ABC):
         Returns:
             True if initialized, False otherwise.
         """
-        pass
 
     @abstractmethod
     def get_dimension_from_metadata(self) -> Optional[Union[str, int]]:
@@ -204,4 +195,3 @@ class VectorDBInterface(ABC):
         Returns:
             The dimension (int or 'full') or None if not found or an error occurs.
         """
-        pass

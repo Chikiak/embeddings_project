@@ -1,20 +1,17 @@
-﻿# core/vectorizer.py
-import torch
-from transformers import AutoModel, AutoProcessor, PreTrainedModel
-from PIL import Image
-from typing import List, Optional, Union, Any, Dict
+﻿import logging
 import math
-import logging
 import time
+from typing import Any, Dict, List, Optional, Union
 
-# Asumiendo que config.py está accesible
-# from config import DEVICE, TRUST_REMOTE_CODE, VECTOR_DIMENSION
-# Valores por defecto por si config no está disponible en este contexto aislado
+import torch
+from PIL import Image
+from transformers import AutoModel, AutoProcessor, PreTrainedModel
+
 DEVICE = "cpu"
 TRUST_REMOTE_CODE = True
 VECTOR_DIMENSION = None
 
-from app.exceptions import VectorizerError # Asegúrate que exceptions.py está en la ruta
+from app.exceptions import VectorizerError
 
 logger = logging.getLogger(__name__)
 
@@ -59,7 +56,7 @@ class Vectorizer:
         self.model: Optional[PreTrainedModel] = None
         self.processor: Optional[Any] = None
         self._is_loaded = False
-        self._native_dimension: Optional[int] = None # NUEVO ATRIBUTO
+        self._native_dimension: Optional[int] = None
 
         logger.info(
             f"Initializing Vectorizer with model: {self.model_name} on device: {self.device}"
@@ -71,15 +68,13 @@ class Vectorizer:
         """Verifica si el modelo (y el procesador, si aplica) están cargados."""
         return self._is_loaded and self.model is not None
 
-    # --- NUEVA PROPIEDAD ---
     @property
     def native_dimension(self) -> Optional[int]:
         """Devuelve la dimensión nativa del embedding del modelo."""
-        # Intenta determinar la dimensión si aún no se ha hecho y el modelo está listo
+
         if self._native_dimension is None and self.is_ready:
             self._determine_native_dimension()
         return self._native_dimension
-    # --- FIN NUEVA PROPIEDAD ---
 
     def _resolve_device(self, requested_device: str) -> str:
         """Determina el dispositivo real a usar, recurriendo a CPU si CUDA no está disponible."""
@@ -89,7 +84,9 @@ class Vectorizer:
                 logger.info("CUDA available. Using GPU.")
                 resolved = "cuda"
             else:
-                logger.warning("CUDA specified but not available. Falling back to CPU.")
+                logger.warning(
+                    "CUDA specified but not available. Falling back to CPU."
+                )
         else:
             logger.info("Using CPU.")
         return resolved
@@ -127,16 +124,17 @@ class Vectorizer:
 
             end_time = time.time()
             if self.processor:
-                logger.info(f"Processor loaded in {end_time - start_time:.2f}s.")
+                logger.info(
+                    f"Processor loaded in {end_time - start_time:.2f}s."
+                )
             else:
                 logger.info(
                     f"Processor loading step completed (none loaded/required) in {end_time - start_time:.2f}s."
                 )
 
             self._is_loaded = True
-            # --- AÑADIR LLAMADA PARA DETERMINAR DIMENSIÓN DESPUÉS DE CARGAR ---
+
             self._determine_native_dimension()
-            # ---------------------------------------------------------------
 
         except OSError as e:
             msg = f"OSError loading model/processor '{self.model_name}': {e}. Correct name? Internet access?"
@@ -149,64 +147,76 @@ class Vectorizer:
             self._is_loaded = False
             raise VectorizerError(msg) from e
         except Exception as e:
-            msg = (
-                f"Unexpected error loading model or processor '{self.model_name}': {e}"
-            )
+            msg = f"Unexpected error loading model or processor '{self.model_name}': {e}"
             logger.error(msg, exc_info=True)
             self._is_loaded = False
             raise VectorizerError(msg) from e
 
-    # --- NUEVO MÉTODO INTERNO ---
     def _determine_native_dimension(self):
         """Intenta determinar y almacenar la dimensión nativa del modelo."""
         if not self.is_ready or self._native_dimension is not None:
-            return # Ya está listo o ya se determinó
+            return
 
-        logger.debug(f"Attempting to determine native dimension for {self.model_name}...")
+        logger.debug(
+            f"Attempting to determine native dimension for {self.model_name}..."
+        )
         try:
-            # Intenta obtener la dimensión de la salida de imagen (más común)
-            # Crea una imagen dummy (negra pequeña)
-            dummy_image = Image.new('RGB', (32, 32), color = 'black')
-            # Prepara la entrada dummy
-            inputs = self._prepare_inputs([dummy_image], "image")
-            # Ejecuta inferencia dummy
-            with torch.no_grad():
-                # Llama al método correcto para obtener features (puede variar por modelo)
-                if hasattr(self.model, 'get_image_features'):
-                    dummy_embedding_tensor = self.model.get_image_features(**inputs)
-                elif hasattr(self.model, 'encode_image'): # Otra convención común
-                     dummy_embedding_tensor = self.model.encode_image(inputs['pixel_values'])
-                elif hasattr(self.model, 'forward'): # Fallback genérico
-                     outputs = self.model(**inputs)
-                     # Intenta encontrar un tensor de embedding en la salida
-                     if hasattr(outputs, 'pooler_output'):
-                         dummy_embedding_tensor = outputs.pooler_output
-                     elif hasattr(outputs, 'last_hidden_state'):
-                         # Podría necesitar pooling aquí, ej: tomar el [CLS] token o media
-                         dummy_embedding_tensor = outputs.last_hidden_state[:, 0] # Ejemplo: [CLS] token
-                     elif isinstance(outputs, torch.Tensor):
-                         dummy_embedding_tensor = outputs
-                     else:
-                         raise VectorizerError("Could not determine embedding output from model forward pass.")
-                else:
-                    raise VectorizerError("Model lacks known methods (get_image_features, encode_image, forward) to get embeddings.")
 
-            # Obtiene la dimensión de la salida
-            if dummy_embedding_tensor is not None and isinstance(dummy_embedding_tensor, torch.Tensor):
+            dummy_image = Image.new("RGB", (32, 32), color="black")
+
+            inputs = self._prepare_inputs([dummy_image], "image")
+
+            with torch.no_grad():
+
+                if hasattr(self.model, "get_image_features"):
+                    dummy_embedding_tensor = self.model.get_image_features(
+                        **inputs
+                    )
+                elif hasattr(self.model, "encode_image"):
+                    dummy_embedding_tensor = self.model.encode_image(
+                        inputs["pixel_values"]
+                    )
+                elif hasattr(self.model, "forward"):
+                    outputs = self.model(**inputs)
+
+                    if hasattr(outputs, "pooler_output"):
+                        dummy_embedding_tensor = outputs.pooler_output
+                    elif hasattr(outputs, "last_hidden_state"):
+
+                        dummy_embedding_tensor = outputs.last_hidden_state[
+                            :, 0
+                        ]
+                    elif isinstance(outputs, torch.Tensor):
+                        dummy_embedding_tensor = outputs
+                    else:
+                        raise VectorizerError(
+                            "Could not determine embedding output from model forward pass."
+                        )
+                else:
+                    raise VectorizerError(
+                        "Model lacks known methods (get_image_features, encode_image, forward) to get embeddings."
+                    )
+
+            if dummy_embedding_tensor is not None and isinstance(
+                dummy_embedding_tensor, torch.Tensor
+            ):
                 self._native_dimension = dummy_embedding_tensor.shape[-1]
-                logger.info(f"Determined native embedding dimension: {self._native_dimension}")
+                logger.info(
+                    f"Determined native embedding dimension: {self._native_dimension}"
+                )
             else:
-                 logger.warning(f"Could not get a valid embedding tensor for dimension determination.")
-                 self._native_dimension = None
+                logger.warning(
+                    f"Could not get a valid embedding tensor for dimension determination."
+                )
+                self._native_dimension = None
 
         except Exception as e:
             logger.warning(
                 f"Could not automatically determine native dimension for model {self.model_name}: {e}. "
                 f"Will rely solely on user-provided dimension or defaults.",
-                exc_info=False # Menos verboso
+                exc_info=False,
             )
-            self._native_dimension = None # Asegura que sea None si falla
-    # --- FIN NUEVO MÉTODO INTERNO ---
+            self._native_dimension = None
 
     def _prepare_inputs(
         self, batch_data: Union[List[Image.Image], List[str]], batch_type: str
@@ -215,15 +225,22 @@ class Vectorizer:
         Prepara los tensores de entrada para el modelo usando el procesador.
         (Sin cambios funcionales necesarios aquí para la gestión de dimensiones)
         """
-        # ... (código existente) ...
+
         if batch_type == "image":
             if not self.processor:
-                raise VectorizerError("Processor is None, cannot process images.")
+                raise VectorizerError(
+                    "Processor is None, cannot process images."
+                )
             if not all(isinstance(item, Image.Image) for item in batch_data):
-                raise TypeError("Image batch must contain only PIL Image objects.")
-            # Asegura que el procesador maneje padding y truncation si es necesario
+                raise TypeError(
+                    "Image batch must contain only PIL Image objects."
+                )
+
             inputs = self.processor(
-                images=batch_data, return_tensors="pt", padding=True, truncation=True
+                images=batch_data,
+                return_tensors="pt",
+                padding=True,
+                truncation=True,
             )
 
         elif batch_type == "text":
@@ -231,10 +248,13 @@ class Vectorizer:
                 raise TypeError("Text batch must contain only strings.")
             if self.processor:
                 inputs = self.processor(
-                    text=batch_data, return_tensors="pt", padding=True, truncation=True
+                    text=batch_data,
+                    return_tensors="pt",
+                    padding=True,
+                    truncation=True,
                 )
             else:
-                # Este caso sigue siendo problemático si el modelo no maneja texto raw
+
                 raise VectorizerError(
                     "Processor is None, cannot process text with standard pipeline."
                 )
@@ -243,7 +263,6 @@ class Vectorizer:
 
         return inputs.to(self.device)
 
-
     def _run_inference(
         self, inputs: Dict[str, torch.Tensor], batch_type: str
     ) -> torch.Tensor:
@@ -251,41 +270,59 @@ class Vectorizer:
         Ejecuta la inferencia del modelo para obtener los embeddings.
         (Sin cambios funcionales necesarios aquí)
         """
-        # ... (código existente usando get_image_features/get_text_features) ...
+
         if not self.model:
             raise VectorizerError("Model is not loaded, cannot run inference.")
 
         with torch.no_grad():
             if batch_type == "image":
-                if hasattr(self.model, 'get_image_features'):
+                if hasattr(self.model, "get_image_features"):
                     embeddings_tensor = self.model.get_image_features(**inputs)
-                elif hasattr(self.model, 'encode_image'):
-                    embeddings_tensor = self.model.encode_image(inputs['pixel_values'])
-                else: # Fallback genérico (puede necesitar ajustes)
+                elif hasattr(self.model, "encode_image"):
+                    embeddings_tensor = self.model.encode_image(
+                        inputs["pixel_values"]
+                    )
+                else:
                     outputs = self.model(**inputs)
-                    if hasattr(outputs, 'pooler_output'): embeddings_tensor = outputs.pooler_output
-                    elif hasattr(outputs, 'last_hidden_state'): embeddings_tensor = outputs.last_hidden_state[:, 0]
-                    elif isinstance(outputs, torch.Tensor): embeddings_tensor = outputs
-                    else: raise VectorizerError("Could not determine embedding output from model.")
+                    if hasattr(outputs, "pooler_output"):
+                        embeddings_tensor = outputs.pooler_output
+                    elif hasattr(outputs, "last_hidden_state"):
+                        embeddings_tensor = outputs.last_hidden_state[:, 0]
+                    elif isinstance(outputs, torch.Tensor):
+                        embeddings_tensor = outputs
+                    else:
+                        raise VectorizerError(
+                            "Could not determine embedding output from model."
+                        )
             elif batch_type == "text":
-                if hasattr(self.model, 'get_text_features'):
+                if hasattr(self.model, "get_text_features"):
                     embeddings_tensor = self.model.get_text_features(**inputs)
-                elif hasattr(self.model, 'encode_text'):
-                    embeddings_tensor = self.model.encode_text(inputs['input_ids'], attention_mask=inputs.get('attention_mask'))
-                else: # Fallback genérico
+                elif hasattr(self.model, "encode_text"):
+                    embeddings_tensor = self.model.encode_text(
+                        inputs["input_ids"],
+                        attention_mask=inputs.get("attention_mask"),
+                    )
+                else:
                     outputs = self.model(**inputs)
-                    if hasattr(outputs, 'pooler_output'): embeddings_tensor = outputs.pooler_output
-                    elif hasattr(outputs, 'last_hidden_state'): embeddings_tensor = outputs.last_hidden_state[:, 0]
-                    elif isinstance(outputs, torch.Tensor): embeddings_tensor = outputs
-                    else: raise VectorizerError("Could not determine embedding output from model.")
+                    if hasattr(outputs, "pooler_output"):
+                        embeddings_tensor = outputs.pooler_output
+                    elif hasattr(outputs, "last_hidden_state"):
+                        embeddings_tensor = outputs.last_hidden_state[:, 0]
+                    elif isinstance(outputs, torch.Tensor):
+                        embeddings_tensor = outputs
+                    else:
+                        raise VectorizerError(
+                            "Could not determine embedding output from model."
+                        )
             else:
-                raise VectorizerError(f"Invalid batch type during inference: {batch_type}")
+                raise VectorizerError(
+                    f"Invalid batch type during inference: {batch_type}"
+                )
 
         if embeddings_tensor is None:
-             raise VectorizerError("Inference returned None for embeddings.")
+            raise VectorizerError("Inference returned None for embeddings.")
 
         return embeddings_tensor
-
 
     def _postprocess_embeddings(
         self, embeddings_tensor: torch.Tensor, truncate_dim: Optional[int]
@@ -294,7 +331,7 @@ class Vectorizer:
         Normaliza, trunca (opcionalmente) y convierte los embeddings a listas de floats.
         (Sin cambios funcionales necesarios aquí)
         """
-        # ... (código existente) ...
+
         embeddings_tensor = torch.nn.functional.normalize(
             embeddings_tensor, p=2, dim=-1
         )
@@ -302,30 +339,33 @@ class Vectorizer:
         was_truncated = False
         original_dim = embeddings_tensor.shape[-1]
 
-        # --- Lógica de Truncamiento ---
-        # Usa el truncate_dim pasado, que podría ser None (sin truncar) o un int
         effective_truncate_dim = truncate_dim
 
-        if effective_truncate_dim is not None and original_dim > effective_truncate_dim:
+        if (
+            effective_truncate_dim is not None
+            and original_dim > effective_truncate_dim
+        ):
             if effective_truncate_dim <= 0:
-                 logger.warning(f"Invalid truncate_dim requested ({effective_truncate_dim}). Using full dimension {original_dim}.")
+                logger.warning(
+                    f"Invalid truncate_dim requested ({effective_truncate_dim}). Using full dimension {original_dim}."
+                )
             else:
-                embeddings_tensor = embeddings_tensor[:, :effective_truncate_dim]
+                embeddings_tensor = embeddings_tensor[
+                    :, :effective_truncate_dim
+                ]
                 was_truncated = True
                 logger.debug(
                     f"Truncated embeddings from {original_dim} to {effective_truncate_dim} dimensions."
                 )
-        # --- Fin Lógica de Truncamiento ---
 
         if was_truncated:
-            # Re-normalizar después de truncar es crucial
+
             embeddings_tensor = torch.nn.functional.normalize(
                 embeddings_tensor, p=2, dim=-1
             )
             logger.debug("Re-normalized embeddings after truncation.")
 
         return embeddings_tensor.cpu().numpy().tolist()
-
 
     def _process_batch(
         self,
@@ -339,10 +379,7 @@ class Vectorizer:
         Método interno refactorizado para procesar un lote de imágenes o textos.
         (Sin cambios funcionales necesarios aquí)
         """
-        # ... (código existente) ...
-        # Llama a _prepare_inputs, _run_inference, _postprocess_embeddings
-        # Asegúrate de que `truncate_dim` se pasa correctamente a _postprocess_embeddings
-        # ...
+
         if not self.is_ready:
             logger.error("Vectorizer not ready. Cannot process batch.")
             return [None] * len(batch_data)
@@ -350,7 +387,9 @@ class Vectorizer:
         all_embeddings: List[Optional[List[float]]] = []
         num_items_total = len(batch_data)
         num_sub_batches = math.ceil(num_items_total / batch_size)
-        logger.debug(f"Processing {num_items_total} '{batch_type}' items in {num_sub_batches} sub-batches of size {batch_size}.")
+        logger.debug(
+            f"Processing {num_items_total} '{batch_type}' items in {num_sub_batches} sub-batches of size {batch_size}."
+        )
 
         for i in range(num_sub_batches):
             sub_batch_start_time = time.time()
@@ -359,86 +398,102 @@ class Vectorizer:
             current_sub_batch = batch_data[start_idx:end_idx]
             sub_batch_len = len(current_sub_batch)
 
-            if not current_sub_batch: continue
+            if not current_sub_batch:
+                continue
 
-            sub_batch_results: List[Optional[List[float]]] = [None] * sub_batch_len
+            sub_batch_results: List[Optional[List[float]]] = [
+                None
+            ] * sub_batch_len
             try:
                 inputs = self._prepare_inputs(current_sub_batch, batch_type)
                 embeddings_tensor = self._run_inference(inputs, batch_type)
-                # --- Pasar truncate_dim aquí ---
+
                 valid_embeddings_list = self._postprocess_embeddings(
                     embeddings_tensor, truncate_dim
                 )
-                # -----------------------------
+
                 if len(valid_embeddings_list) == sub_batch_len:
                     sub_batch_results = valid_embeddings_list
                 else:
-                    logger.error(f"Sub-batch {i+1}/{num_sub_batches}: Output size mismatch! Expected {sub_batch_len}, got {len(valid_embeddings_list)}. Filling with None.")
+                    logger.error(
+                        f"Sub-batch {i+1}/{num_sub_batches}: Output size mismatch! Expected {sub_batch_len}, got {len(valid_embeddings_list)}. Filling with None."
+                    )
             except (VectorizerError, TypeError, RuntimeError, ValueError) as e:
-                logger.error(f"Error vectorizing sub-batch {i+1}/{num_sub_batches} ('{batch_type}'): {e}", exc_info=False)
+                logger.error(
+                    f"Error vectorizing sub-batch {i+1}/{num_sub_batches} ('{batch_type}'): {e}",
+                    exc_info=False,
+                )
             except Exception as e:
-                logger.error(f"Unexpected error vectorizing sub-batch {i+1}/{num_sub_batches} ('{batch_type}'): {e}", exc_info=True)
+                logger.error(
+                    f"Unexpected error vectorizing sub-batch {i+1}/{num_sub_batches} ('{batch_type}'): {e}",
+                    exc_info=True,
+                )
 
             all_embeddings.extend(sub_batch_results)
             sub_batch_end_time = time.time()
-            logger.debug(f"Sub-batch {i+1}/{num_sub_batches} ({batch_type}) processed in {sub_batch_end_time - sub_batch_start_time:.3f}s.")
+            logger.debug(
+                f"Sub-batch {i+1}/{num_sub_batches} ({batch_type}) processed in {sub_batch_end_time - sub_batch_start_time:.3f}s."
+            )
 
-        # ... (padding final si es necesario) ...
         return all_embeddings
-
 
     def vectorize_images(
         self,
         images: List[Image.Image],
         batch_size: int,
-        truncate_dim: Optional[int] = None, # Acepta truncate_dim
+        truncate_dim: Optional[int] = None,
     ) -> List[Optional[List[float]]]:
         """
         Vectoriza una lista de objetos PIL Image.
         (Sin cambios funcionales necesarios aquí, solo pasa truncate_dim)
         """
-        # ... (validaciones existentes) ...
-        if not self.is_ready: raise VectorizerError("Vectorizer not ready.")
-        if not images or not isinstance(images, list): return []
-        if not all(isinstance(img, Image.Image) for img in images): raise TypeError("Input list contains non-PIL Image objects.")
+
+        if not self.is_ready:
+            raise VectorizerError("Vectorizer not ready.")
+        if not images or not isinstance(images, list):
+            return []
+        if not all(isinstance(img, Image.Image) for img in images):
+            raise TypeError("Input list contains non-PIL Image objects.")
 
         num_images = len(images)
-        # Usa el truncate_dim proporcionado
-        logger.info(f"Starting vectorization of {num_images} images (Batch Size: {batch_size}, Truncate Dim: {truncate_dim or 'Full'})...")
-        # ... (código de timing existente) ...
 
-        embeddings = self._process_batch(
-            images, "image", batch_size, truncate_dim # Pasa truncate_dim
+        logger.info(
+            f"Starting vectorization of {num_images} images (Batch Size: {batch_size}, Truncate Dim: {truncate_dim or 'Full'})..."
         )
 
-        # ... (código de logging de resultados existente) ...
+        embeddings = self._process_batch(
+            images, "image", batch_size, truncate_dim
+        )
+
         return embeddings
 
     def vectorize_texts(
         self,
         texts: List[str],
         batch_size: int,
-        truncate_dim: Optional[int] = None, # Acepta truncate_dim
+        truncate_dim: Optional[int] = None,
         is_query: bool = False,
     ) -> List[Optional[List[float]]]:
         """
         Vectoriza una lista de strings de texto.
         (Sin cambios funcionales necesarios aquí, solo pasa truncate_dim)
         """
-        # ... (validaciones existentes) ...
-        if not self.is_ready: raise VectorizerError("Vectorizer not ready.")
-        if not texts or not isinstance(texts, list): return []
-        if not all(isinstance(t, str) for t in texts): raise TypeError("Input list contains non-string objects.")
+
+        if not self.is_ready:
+            raise VectorizerError("Vectorizer not ready.")
+        if not texts or not isinstance(texts, list):
+            return []
+        if not all(isinstance(t, str) for t in texts):
+            raise TypeError("Input list contains non-string objects.")
 
         num_texts = len(texts)
-        # Usa el truncate_dim proporcionado
-        logger.info(f"Starting vectorization of {num_texts} texts (Batch Size: {batch_size}, Truncate Dim: {truncate_dim or 'Full'}, Is Query: {is_query})...")
-        # ... (código de timing existente) ...
 
-        embeddings = self._process_batch(
-            texts, "text", batch_size, truncate_dim, is_query=is_query # Pasa truncate_dim
+        logger.info(
+            f"Starting vectorization of {num_texts} texts (Batch Size: {batch_size}, Truncate Dim: {truncate_dim or 'Full'}, Is Query: {is_query})..."
         )
 
-        # ... (código de logging de resultados existente) ...
-        return embeddings
+        embeddings = self._process_batch(
+            texts, "text", batch_size, truncate_dim, is_query=is_query
+        )
 
+        return embeddings

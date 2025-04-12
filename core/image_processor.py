@@ -1,16 +1,18 @@
-﻿# core/image_processor.py
+﻿import logging
 import os
-from PIL import Image, UnidentifiedImageError, ExifTags, ImageOps
 from typing import List, Optional, Tuple
-import logging
 
-from config import IMAGE_EXTENSIONS
+from PIL import ExifTags, Image, ImageOps, UnidentifiedImageError
+
 from app.exceptions import ImageProcessingError
+from config import IMAGE_EXTENSIONS
 
 logger = logging.getLogger(__name__)
 
 try:
-    ORIENTATION_TAG_ID = next(k for k, v in ExifTags.TAGS.items() if v == "Orientation")
+    ORIENTATION_TAG_ID = next(
+        k for k, v in ExifTags.TAGS.items() if v == "Orientation"
+    )
 except StopIteration:
     ORIENTATION_TAG_ID = None
     logger.debug("EXIF Orientation Tag ID not found in Pillow's ExifTags.")
@@ -66,7 +68,9 @@ def find_image_files(directory_path: str) -> List[str]:
     """
     image_files: List[str] = []
     if not isinstance(directory_path, str) or not directory_path:
-        raise ValueError("Invalid directory path provided (empty or not a string).")
+        raise ValueError(
+            "Invalid directory path provided (empty or not a string)."
+        )
     if not os.path.isdir(directory_path):
         raise FileNotFoundError(
             f"Directory not found or not accessible: {directory_path}"
@@ -85,9 +89,13 @@ def find_image_files(directory_path: str) -> List[str]:
                     try:
                         if os.path.isfile(full_path):
                             image_files.append(full_path)
-                            logger.debug(f"  Found potential image file: {full_path}")
+                            logger.debug(
+                                f"  Found potential image file: {full_path}"
+                            )
                         else:
-                            logger.debug(f"  Skipping non-file entry: {full_path}")
+                            logger.debug(
+                                f"  Skipping non-file entry: {full_path}"
+                            )
                     except OSError as stat_error:
                         logger.warning(
                             f"  Could not stat file {full_path}, skipping: {stat_error}"
@@ -137,7 +145,9 @@ def load_image(
         return None
 
     if not os.path.isfile(image_path):
-        logger.warning(f"Image file does not exist or is not a file: {image_path}")
+        logger.warning(
+            f"Image file does not exist or is not a file: {image_path}"
+        )
         return None
 
     try:
@@ -150,7 +160,9 @@ def load_image(
             logger.debug(
                 f"Converting image '{os.path.basename(image_path)}' from mode {img.mode} to RGB."
             )
-            if img.mode == "RGBA" or (img.mode == "P" and "transparency" in img.info):
+            if img.mode == "RGBA" or (
+                img.mode == "P" and "transparency" in img.info
+            ):
                 try:
                     background = Image.new("RGB", img.size, (255, 255, 255))
                     background.paste(img, mask=img.split()[-1])
@@ -189,7 +201,9 @@ def load_image(
         return None
 
 
-def batch_load_images(image_paths: List[str]) -> Tuple[List[Image.Image], List[str]]:
+def batch_load_images(
+    image_paths: List[str],
+) -> Tuple[List[Image.Image], List[str]]:
     """
     Carga un lote de imágenes desde una lista de rutas, omitiendo las que fallan al cargar.
 

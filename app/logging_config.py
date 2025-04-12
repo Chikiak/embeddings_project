@@ -1,5 +1,6 @@
 ﻿import logging
 import sys
+
 import config
 
 
@@ -16,10 +17,8 @@ def setup_logging():
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
         stream=sys.stdout,
     )
-    logging.getLogger("httpx").setLevel(
-        logging.WARNING
-    )  # Reduce verbosity from http library
-    logging.getLogger("chromadb").setLevel(
-        logging.WARNING
-    )  # Reduce verbosity from chromadb library
-    logging.info(f"Logging configurado a nivel: {logging.getLevelName(log_level)}")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
+    logging.getLogger("chromadb").setLevel(logging.WARNING)
+    logging.info(
+        f"Logging configurado a nivel: {logging.getLevelName(log_level)}"
+    )
