@@ -4,9 +4,13 @@ import logging
 import time
 from argparse import Namespace
 
+# Imports internos del proyecto
 from core.vectorizer import Vectorizer
 from data_access.vector_db_interface import VectorDBInterface
-from app import pipeline
+# --- Importar desde los nuevos módulos ---
+from app import indexing # Importa el módulo de indexación
+from app import searching # Importa el módulo de búsqueda
+# --------------------------------------
 from app.exceptions import PipelineError, DatabaseError
 import config
 
@@ -39,13 +43,15 @@ def handle_indexing(args: Namespace, vectorizer: Vectorizer, db: VectorDBInterfa
         return
 
     try:
-        processed_count = pipeline.process_directory(
+        # --- Llamar a la función desde el módulo indexing ---
+        processed_count = indexing.process_directory(
             directory_path=args.image_dir,
             vectorizer=vectorizer,
             db=db,
             batch_size=config.BATCH_SIZE_IMAGES,
             truncate_dim=args.truncate_dim,
         )
+        # ---------------------------------------------------
         logger.info(
             f"Finished processing directory. Stored/updated {processed_count} embeddings."
         )
@@ -75,13 +81,15 @@ def handle_text_search(args: Namespace, vectorizer: Vectorizer, db: VectorDBInte
 
     start_search_time = time.time()
     try:
-        search_results = pipeline.search_by_text(
+        # --- Llamar a la función desde el módulo searching ---
+        search_results = searching.search_by_text(
             query_text=args.search_text,
             vectorizer=vectorizer,
             db=db,
             n_results=args.n_results,
             truncate_dim=args.truncate_dim,
         )
+        # ----------------------------------------------------
         end_search_time = time.time()
         logger.info(f"Search completed in {end_search_time - start_search_time:.2f}s.")
 
@@ -134,13 +142,15 @@ def handle_image_search(args: Namespace, vectorizer: Vectorizer, db: VectorDBInt
 
     start_search_time = time.time()
     try:
-        search_results = pipeline.search_by_image(
+        # --- Llamar a la función desde el módulo searching ---
+        search_results = searching.search_by_image(
             query_image_path=args.search_image,
             vectorizer=vectorizer,
             db=db,
             n_results=args.n_results,
             truncate_dim=args.truncate_dim,
         )
+        # ----------------------------------------------------
         end_search_time = time.time()
         logger.info(f"Search completed in {end_search_time - start_search_time:.2f}s.")
 
@@ -202,6 +212,7 @@ def handle_clear_collection(args: Namespace, db: VectorDBInterface):
         args: Objeto Namespace de argparse con los argumentos del CLI.
         db: Instancia de VectorDBInterface inicializada.
     """
+    # Esta función interactúa directamente con la BD, no necesita los módulos indexing/searching
     logger.warning(
         f"ACTION: Clearing all items from collection '{args.collection_name}' at path '{args.db_path}'..."
     )
@@ -235,6 +246,7 @@ def handle_delete_collection(args: Namespace, db: VectorDBInterface):
         args: Objeto Namespace de argparse con los argumentos del CLI.
         db: Instancia de VectorDBInterface inicializada.
     """
+    # Esta función interactúa directamente con la BD, no necesita los módulos indexing/searching
     logger.warning(
         f"ACTION: Deleting the ENTIRE collection '{args.collection_name}' from path '{args.db_path}'..."
     )

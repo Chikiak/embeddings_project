@@ -19,9 +19,12 @@ try:
     from app.factory import get_initialized_components # Keep this
     from core.vectorizer import Vectorizer
     from data_access.vector_db_interface import VectorDBInterface
-    from app import pipeline # Import the pipeline module
+    # --- Importar desde los nuevos módulos ---
+    from app import indexing # Importa el módulo de indexación
+    from app import searching # Importa el módulo de búsqueda
+    # --------------------------------------
     from app.models import SearchResults, SearchResultItem
-    from core.image_processor import find_image_files
+    from core.image_processor import find_image_files # Se usa en tab de indexación
     from app.logging_config import setup_logging
     from app.exceptions import InitializationError, PipelineError, DatabaseError
 
@@ -113,6 +116,7 @@ def cached_get_components(model_name_to_load: str) -> Tuple[Optional[Vectorizer]
 
     try:
         status_text.text(f"Cargando modelo de vectorización '{model_name_to_load}'...")
+        # Usa la función de app.factory
         vectorizer, db = get_initialized_components(model_name=model_name_to_load)
         progress_bar.progress(50)
 
@@ -343,6 +347,7 @@ def _render_indexed_selection(db: VectorDBInterface, key_suffix: str = "") -> Op
     try:
         limit_get = 25
         logger.debug(f"Attempting to retrieve up to {limit_get} IDs for indexed selection preview...")
+        # Usa el método de la interfaz de BD
         data = db.get_all_embeddings_with_ids(pagination_batch_size=limit_get)
 
         if data and data[0]:
@@ -525,6 +530,7 @@ def render_indexing_tab(vectorizer: Vectorizer, db: VectorDBInterface, truncate_
             st.info(f"Verificando directorio: `{image_dir_path}`...")
             with st.spinner("Buscando imágenes..."):
                 try:
+                    # Usa la función de core.image_processor
                     image_files = find_image_files(image_dir_path)
                 except Exception as find_err:
                     st.error(f"Error al buscar archivos: {find_err}")
@@ -578,20 +584,21 @@ def render_indexing_tab(vectorizer: Vectorizer, db: VectorDBInterface, truncate_
                 if total > 0:
                     progress_percent = min(float(current) / float(total), 1.0)
                     try: progress_bar_idx.progress(progress_percent)
-                    except Exception: pass
+                    except Exception: pass # Avoid errors if widget disappears
                 else:
                      try: progress_bar_idx.progress(0.0)
                      except Exception: pass
 
             def update_streamlit_status(message: str):
                  try: status_text_idx.info(message)
-                 except Exception: pass
+                 except Exception: pass # Avoid errors if widget disappears
 
             try:
                 logger.info(
-                    f"Starting indexing via pipeline for directory: {image_dir_path}"
+                    f"Starting indexing via Streamlit for directory: {image_dir_path}"
                 )
-                total_processed_successfully = pipeline.process_directory(
+                # --- Llamar a la función desde el módulo indexing ---
+                total_processed_successfully = indexing.process_directory(
                     directory_path=image_dir_path,
                     vectorizer=vectorizer,
                     db=db,
@@ -600,6 +607,7 @@ def render_indexing_tab(vectorizer: Vectorizer, db: VectorDBInterface, truncate_
                     progress_callback=update_streamlit_progress,
                     status_callback=update_streamlit_status,
                 )
+                # ---------------------------------------------------
                 end_time_idx = time.time()
                 elapsed_time = end_time_idx - start_time_idx
                 status_text_idx.success(
@@ -608,7 +616,7 @@ def render_indexing_tab(vectorizer: Vectorizer, db: VectorDBInterface, truncate_
                 logger.info(
                     f"Indexing finished successfully in {elapsed_time:.2f}s. Stored/updated: {total_processed_successfully}"
                 )
-                _display_database_info(db, st.sidebar)
+                _display_database_info(db, st.sidebar) # Update sidebar info
 
             except PipelineError as e:
                 status_text_idx.error(f"❌ Error en el pipeline de indexación: {e}")
@@ -713,6 +721,7 @@ def render_indexing_tab(vectorizer: Vectorizer, db: VectorDBInterface, truncate_
                                         st.success(
                                             f"✅ Colección '{collection_name_deleted}' eliminada permanentemente."
                                         )
+                                        # Clear sidebar info or update it
                                         st.sidebar.empty()
                                         st.sidebar.header("Base de Datos Vectorial")
                                         st.sidebar.warning(f"Colección '{collection_name_deleted}' eliminada.")
@@ -770,13 +779,15 @@ def render_text_search_tab(vectorizer: Vectorizer, db: VectorDBInterface, trunca
             with st.spinner(f"🧠 Buscando imágenes similares a: '{query_text}'..."):
                 try:
                     logger.info(f"Performing text search for: '{query_text}'")
-                    results: Optional[SearchResults] = pipeline.search_by_text(
+                    # --- Llamar a la función desde el módulo searching ---
+                    results: Optional[SearchResults] = searching.search_by_text(
                         query_text=query_text,
                         vectorizer=vectorizer,
                         db=db,
                         n_results=num_results_text,
                         truncate_dim=truncate_dim,
                     )
+                    # ----------------------------------------------------
                     display_results(results, results_container_text)
                     if results:
                         logger.info(
@@ -811,6 +822,7 @@ def render_image_search_tab(vectorizer: Vectorizer, db: VectorDBInterface, trunc
     selected_state_key = get_state_key(STATE_SELECTED_INDEXED_IMG_PREFIX, key_suffix)
     trigger_search_key = get_state_key(STATE_TRIGGER_SEARCH_FLAG_PREFIX, key_suffix)
 
+    # Initialize state if not present
     if uploaded_state_key not in st.session_state:
         st.session_state[uploaded_state_key] = None
     if selected_state_key not in st.session_state:
@@ -825,7 +837,7 @@ def render_image_search_tab(vectorizer: Vectorizer, db: VectorDBInterface, trunc
     search_triggered_automatically = False
     if st.session_state.get(trigger_search_key, False):
         logger.debug(f"Detected trigger flag set for key: {trigger_search_key}")
-        st.session_state[trigger_search_key] = False
+        st.session_state[trigger_search_key] = False # Reset the flag
         query_image_path_auto = st.session_state.get(selected_state_key)
 
         if query_image_path_auto and os.path.isfile(query_image_path_auto):
@@ -839,13 +851,15 @@ def render_image_search_tab(vectorizer: Vectorizer, db: VectorDBInterface, trunc
                     with st.spinner("🖼️ Buscando imágenes similares (automático)..."):
                         try:
                             logger.info(f"Performing AUTOMATIC image search using selected indexed image: {query_image_path_auto}")
-                            results_auto: Optional[SearchResults] = pipeline.search_by_image(
+                            # --- Llamar a la función desde el módulo searching ---
+                            results_auto: Optional[SearchResults] = searching.search_by_image(
                                 query_image_path=query_image_path_auto,
                                 vectorizer=vectorizer,
                                 db=db,
                                 n_results=num_results_auto,
                                 truncate_dim=truncate_dim,
                             )
+                            # ----------------------------------------------------
                             display_results(results_auto, results_container) # Display in main container
                             if results_auto:
                                 logger.info(f"Automatic image search completed. Found {results_auto.count} similar images.")
@@ -871,7 +885,7 @@ def render_image_search_tab(vectorizer: Vectorizer, db: VectorDBInterface, trunc
         ("Subir una imagen nueva", "Seleccionar una imagen ya indexada"),
         key=f"image_search_mode{key_suffix}",
         horizontal=True,
-        on_change=reset_image_selection_states, args=(key_suffix,)
+        on_change=reset_image_selection_states, args=(key_suffix,) # Reset state on mode change
     )
 
     num_results_img = st.slider(
@@ -885,6 +899,7 @@ def render_image_search_tab(vectorizer: Vectorizer, db: VectorDBInterface, trunc
     query_image_source_info: str = ""
 
     if search_mode == "Subir una imagen nueva":
+        # Ensure indexed selection state is cleared if switching to upload mode
         if st.session_state.get(selected_state_key) is not None:
             st.session_state[selected_state_key] = None
             st.session_state[trigger_search_key] = False
@@ -893,8 +908,9 @@ def render_image_search_tab(vectorizer: Vectorizer, db: VectorDBInterface, trunc
             query_image_path_to_use = temp_path
             query_image_source_info = "Imagen Subida"
     elif search_mode == "Seleccionar una imagen ya indexada":
+        # Ensure uploaded file state is cleared if switching to select mode
         if st.session_state.get(uploaded_state_key) is not None:
-             reset_image_selection_states(key_suffix)
+             reset_image_selection_states(key_suffix) # Clears temp file too
         selected_path = _render_indexed_selection(db, key_suffix=key_suffix)
         if selected_path:
             query_image_path_to_use = selected_path
@@ -925,13 +941,15 @@ def render_image_search_tab(vectorizer: Vectorizer, db: VectorDBInterface, trunc
                             logger.info(
                                 f"Performing MANUAL image search using query image: {query_image_path_to_use}"
                             )
-                            results: Optional[SearchResults] = pipeline.search_by_image(
+                            # --- Llamar a la función desde el módulo searching ---
+                            results: Optional[SearchResults] = searching.search_by_image(
                                 query_image_path=query_image_path_to_use,
                                 vectorizer=vectorizer,
                                 db=db,
                                 n_results=num_results_img,
                                 truncate_dim=truncate_dim,
                             )
+                            # ----------------------------------------------------
                             display_results(results, results_container) # Display in main container
                             if results:
                                 logger.info(
@@ -955,6 +973,7 @@ def render_image_search_tab(vectorizer: Vectorizer, db: VectorDBInterface, trunc
         elif search_button_disabled:
             st.info("Sube una imagen válida para activar el botón de búsqueda.")
     elif search_mode == "Seleccionar una imagen ya indexada":
+        # Logic for displaying info when an indexed image is selected (search runs automatically)
         if not search_triggered_automatically and query_image_displayed:
              st.info("La imagen está seleccionada. La búsqueda se realizó automáticamente al hacer clic en 'Usar esta'.")
         elif not query_image_displayed:
@@ -1044,7 +1063,8 @@ def render_hybrid_search_tab(vectorizer: Vectorizer, db: VectorDBInterface, trun
                        results: Optional[SearchResults] = None
                        if search_method_name == "Interpolar Embeddings":
                             logger.info(f"Performing hybrid search (Interpolate): Text='{hybrid_query_text}', Image='{query_image_path_hybrid}', Alpha={hybrid_alpha}")
-                            results = pipeline.search_hybrid( # Call original function
+                            # --- Llamar a la función desde el módulo searching ---
+                            results = searching.search_hybrid(
                                  query_text=hybrid_query_text,
                                  query_image_path=query_image_path_hybrid,
                                  vectorizer=vectorizer,
@@ -1053,9 +1073,11 @@ def render_hybrid_search_tab(vectorizer: Vectorizer, db: VectorDBInterface, trun
                                  truncate_dim=truncate_dim,
                                  alpha=hybrid_alpha
                             )
+                            # ----------------------------------------------------
                        elif search_method_name == "Fusión RRF":
                             logger.info(f"Performing hybrid search (RRF): Text='{hybrid_query_text}', Image='{query_image_path_hybrid}'")
-                            results = pipeline.search_hybrid_rrf( # Call new RRF function
+                            # --- Llamar a la función desde el módulo searching ---
+                            results = searching.search_hybrid_rrf(
                                  query_text=hybrid_query_text,
                                  query_image_path=query_image_path_hybrid,
                                  vectorizer=vectorizer,
@@ -1064,6 +1086,7 @@ def render_hybrid_search_tab(vectorizer: Vectorizer, db: VectorDBInterface, trun
                                  truncate_dim=truncate_dim
                                  # k_rrf uses default from pipeline function
                             )
+                            # ----------------------------------------------------
                        else:
                             st.error(f"Método híbrido desconocido: {search_method_name}")
 
@@ -1097,15 +1120,18 @@ def main():
     st.sidebar.header("Configuración Global")
 
     try:
-        default_model_index = config.AVAILABLE_MODELS.index(st.session_state.get(STATE_SELECTED_MODEL, config.DEFAULT_MODEL_NAME))
+        # Use session state to preserve selection across runs if possible
+        default_model_name = st.session_state.get(STATE_SELECTED_MODEL, config.DEFAULT_MODEL_NAME)
+        default_model_index = config.AVAILABLE_MODELS.index(default_model_name)
     except ValueError:
         default_model_index = 0
+        st.session_state[STATE_SELECTED_MODEL] = config.AVAILABLE_MODELS[default_model_index] # Set default if invalid
 
     selected_model = st.sidebar.selectbox(
         "Modelo de Embedding:",
         options=config.AVAILABLE_MODELS,
         index=default_model_index,
-        key=STATE_SELECTED_MODEL,
+        key=STATE_SELECTED_MODEL, # Use the key to store selection
         help="Elige el modelo para generar los vectores. Cambiarlo recargará el modelo."
     )
 
@@ -1114,14 +1140,14 @@ def main():
         min_value=0,
         value=st.session_state.get(STATE_SELECTED_DIMENSION, config.VECTOR_DIMENSION or 0),
         step=32,
-        key=STATE_SELECTED_DIMENSION,
+        key=STATE_SELECTED_DIMENSION, # Use key to store selection
         help="Número de dimensiones del vector final. 0 usa la dimensión nativa del modelo."
     )
     truncate_dim_value = selected_dimension if selected_dimension > 0 else None
 
     # --- Initialize Components based on selected model ---
-    active_model_name = st.session_state.get(STATE_SELECTED_MODEL, config.DEFAULT_MODEL_NAME)
-    vectorizer, db = cached_get_components(active_model_name)
+    active_model_name = st.session_state.get(STATE_SELECTED_MODEL) # Get current model from state
+    vectorizer, db = cached_get_components(active_model_name) # Pass the selected model name
 
     # --- Display System/DB Info ---
     st.sidebar.header("Información del Sistema")
