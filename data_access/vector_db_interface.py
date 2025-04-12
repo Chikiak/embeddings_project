@@ -3,100 +3,121 @@ from abc import ABC, abstractmethod
 from typing import List, Dict, Optional, Any, Tuple
 import numpy as np
 
-# Importar modelos de datos
-from app.models import SearchResults  # Usar SearchResults directamente
+from app.models import SearchResults
 
 
 class VectorDBInterface(ABC):
     """
-    Abstract Base Class defining the interface for vector database operations.
-    This allows swapping different vector database implementations (e.g., ChromaDB, FAISS, Qdrant)
-    without changing the core application logic that depends on this interface.
+    Clase Base Abstracta que define la interfaz para operaciones de base de datos vectorial.
+
+    Permite intercambiar diferentes implementaciones de bases de datos vectoriales
+    (ej: ChromaDB, FAISS, Qdrant) sin cambiar la lógica central de la aplicación
+    que depende de esta interfaz.
     """
 
     @abstractmethod
     def add_embeddings(
-            self,
-            ids: List[str],
-            embeddings: List[List[float]],
-            metadatas: Optional[List[Dict[str, Any]]] = None,
+        self,
+        ids: List[str],
+        embeddings: List[List[float]],
+        metadatas: Optional[List[Dict[str, Any]]] = None,
     ) -> bool:
         """
-        Adds or updates embeddings in the database.
+        Añade o actualiza embeddings en la base de datos.
 
         Args:
-            ids: A list of unique identifiers for each embedding.
-            embeddings: A list of embeddings (lists of floats).
-            metadatas: An optional list of metadata dictionaries corresponding to each embedding.
+            ids: Una lista de identificadores únicos para cada embedding.
+            embeddings: Una lista de embeddings (listas de floats).
+            metadatas: Una lista opcional de diccionarios de metadatos
+                       correspondientes a cada embedding.
 
         Returns:
-            True if the operation was successful, False otherwise.
+            True si la operación fue exitosa, False en caso contrario.
+
+        Raises:
+            DatabaseError: Si ocurre un error durante la operación.
         """
         pass
 
     @abstractmethod
     def query_similar(
-            self, query_embedding: List[float], n_results: int
+        self, query_embedding: List[float], n_results: int
     ) -> Optional[SearchResults]:
         """
-        Queries the database for embeddings similar to the query embedding.
+        Consulta la base de datos por embeddings similares al embedding de consulta.
 
         Args:
-            query_embedding: The embedding vector to search for.
-            n_results: The maximum number of similar results to return.
+            query_embedding: El vector de embedding a buscar.
+            n_results: El número máximo de resultados similares a devolver.
 
         Returns:
-            A SearchResults object containing the found items, or None if the query failed.
-            Returns an empty SearchResults object if the query was successful but found no matches.
+            Un objeto SearchResults que contiene los elementos encontrados,
+            o None si la consulta falló. Devuelve un SearchResults vacío si la
+            consulta fue exitosa pero no encontró coincidencias.
+
+        Raises:
+            DatabaseError: Si ocurre un error durante la consulta.
         """
         pass
 
     @abstractmethod
     def get_all_embeddings_with_ids(
-            self, pagination_batch_size: int = 1000
+        self, pagination_batch_size: int = 1000
     ) -> Optional[Tuple[List[str], np.ndarray]]:
         """
-        Retrieves all embeddings and their corresponding IDs from the database.
-        Uses pagination for memory efficiency with large datasets.
+        Recupera todos los embeddings y sus IDs correspondientes de la base de datos.
+
+        Utiliza paginación para eficiencia de memoria con grandes conjuntos de datos.
 
         Args:
-            pagination_batch_size: The number of items to retrieve in each batch during pagination.
+            pagination_batch_size: El número de elementos a recuperar en cada
+                                   lote durante la paginación.
 
         Returns:
-            A tuple containing:
-            - A list of all IDs.
-            - A NumPy array of all embeddings.
-            Returns None if retrieval fails. Returns ([], np.empty(0, ...)) if the collection is empty.
+            Una tupla que contiene:
+            - Una lista de todos los IDs.
+            - Un array NumPy de todos los embeddings.
+            Devuelve None si la recuperación falla. Devuelve ([], np.empty(0, ...))
+            si la colección está vacía.
+
+        Raises:
+            DatabaseError: Si ocurre un error durante la recuperación.
         """
         pass
 
     @abstractmethod
     def clear_collection(self) -> bool:
         """
-        Removes all items from the current collection.
+        Elimina todos los elementos de la colección actual.
 
         Returns:
-            True if the collection was successfully cleared, False otherwise.
+            True si la colección se limpió con éxito, False en caso contrario.
+
+        Raises:
+            DatabaseError: Si ocurre un error durante la limpieza.
         """
         pass
 
     @abstractmethod
     def delete_collection(self) -> bool:
         """
-        Deletes the entire collection from the database.
+        Elimina toda la colección de la base de datos.
 
         Returns:
-            True if the collection was successfully deleted, False otherwise.
+            True si la colección se eliminó con éxito, False en caso contrario.
+
+        Raises:
+            DatabaseError: Si ocurre un error durante la eliminación.
         """
         pass
 
     @abstractmethod
     def count(self) -> int:
         """
-        Returns the total number of items currently in the collection.
+        Devuelve el número total de elementos actualmente en la colección.
 
         Returns:
-            The number of items, or -1 if an error occurs during counting.
+            El número de elementos, o -1 si ocurre un error durante el conteo.
         """
         pass
 
@@ -104,9 +125,10 @@ class VectorDBInterface(ABC):
     @abstractmethod
     def is_initialized(self) -> bool:
         """
-        Checks if the database connection and collection are properly initialized.
+        Comprueba si la conexión a la base de datos y la colección están
+        correctamente inicializadas.
 
         Returns:
-            True if initialized, False otherwise.
+            True si está inicializado, False en caso contrario.
         """
         pass

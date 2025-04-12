@@ -4,13 +4,11 @@ from PIL import Image, UnidentifiedImageError, ExifTags, ImageOps
 from typing import List, Optional, Tuple
 import logging
 
-# Importar configuración
 from config import IMAGE_EXTENSIONS
+from app.exceptions import ImageProcessingError
 
 logger = logging.getLogger(__name__)
 
-# --- EXIF Orientation Helper ---
-# Cache the Orientation TAG ID
 try:
     ORIENTATION_TAG_ID = next(k for k, v in ExifTags.TAGS.items() if v == "Orientation")
 except StopIteration:
@@ -20,68 +18,70 @@ except StopIteration:
 
 def correct_image_orientation(img: Image.Image) -> Image.Image:
     """
-    Corrects the orientation of a PIL image based on its EXIF data.
-    Uses ImageOps.exif_transpose for a more robust approach.
+    Corrige la orientación de una imagen PIL basándose en sus datos EXIF.
+
+    Utiliza ImageOps.exif_transpose para un enfoque robusto.
 
     Args:
-        img: The input PIL Image object.
+        img: El objeto PIL Image de entrada.
 
     Returns:
-        The orientation-corrected PIL Image object. Returns the original image
-        if no EXIF orientation data is found or an error occurs.
+        El objeto PIL Image con la orientación corregida. Devuelve la imagen
+        original si no se encuentran datos de orientación EXIF o si ocurre un error.
     """
-    # Check if the necessary tag ID was found
     if ORIENTATION_TAG_ID is None:
-        logger.debug("Skipping orientation correction: Orientation tag ID not available.")
+        logger.debug(
+            "Skipping orientation correction: Orientation tag ID not available."
+        )
         return img
 
     try:
-        # Use Pillow's built-in function for robust handling
-        # This function handles various orientation values correctly.
         corrected_img = ImageOps.exif_transpose(img)
-        # Check if the image object actually changed (i.e., if transpose was applied)
         if corrected_img is not img:
             logger.debug("Applied EXIF orientation correction.")
         return corrected_img
     except Exception as e:
-        # Catch potential errors during EXIF processing or transposition
-        logger.warning(f"Could not apply EXIF orientation correction: {e}", exc_info=True)
-        return img  # Return original image on error
+        logger.warning(
+            f"Could not apply EXIF orientation correction: {e}", exc_info=True
+        )
+        return img
 
-
-# --- Main Functions ---
 
 def find_image_files(directory_path: str) -> List[str]:
     """
-    Recursively finds all image files in the specified directory.
+    Encuentra recursivamente todos los archivos de imagen en el directorio especificado.
 
     Args:
-        directory_path: The path to the directory to search.
+        directory_path: La ruta al directorio a buscar.
 
     Returns:
-        A list of full paths to image files matching extensions defined in
-        config.IMAGE_EXTENSIONS (case-insensitive). Returns an empty list
-        if the directory is not found or errors occur.
+        Una lista de rutas completas a archivos de imagen que coinciden con las
+        extensiones definidas en config.IMAGE_EXTENSIONS (insensible a mayúsculas).
+        Devuelve una lista vacía si el directorio no se encuentra o si ocurren errores.
+
+    Raises:
+        ValueError: Si directory_path no es una cadena válida.
+        FileNotFoundError: Si directory_path no es un directorio válido.
+        ImageProcessingError: Si ocurre un error inesperado durante la búsqueda.
     """
     image_files: List[str] = []
     if not isinstance(directory_path, str) or not directory_path:
-        logger.error("Invalid directory path provided (empty or not a string).")
-        return image_files
+        raise ValueError("Invalid directory path provided (empty or not a string).")
     if not os.path.isdir(directory_path):
-        logger.error(f"Directory not found or not accessible: {directory_path}")
-        return image_files
+        raise FileNotFoundError(
+            f"Directory not found or not accessible: {directory_path}"
+        )
 
-    logger.info(f"Searching for images with extensions {IMAGE_EXTENSIONS} in: {directory_path}")
+    logger.info(
+        f"Searching for images with extensions {IMAGE_EXTENSIONS} in: {directory_path}"
+    )
     files_scanned = 0
     try:
-        for root, _, files in os.walk(directory_path, topdown=True):  # Use topdown=True (default)
+        for root, _, files in os.walk(directory_path, topdown=True):
             for filename in files:
                 files_scanned += 1
-                # Check if the file extension (lowercase) is in the allowed tuple
                 if filename.lower().endswith(IMAGE_EXTENSIONS):
                     full_path = os.path.join(root, filename)
-                    # Final check: Ensure it's actually a file (not a broken link, etc.)
-                    # Use try-except for os.path.isfile in case of permission errors during check
                     try:
                         if os.path.isfile(full_path):
                             image_files.append(full_path)
@@ -89,120 +89,128 @@ def find_image_files(directory_path: str) -> List[str]:
                         else:
                             logger.debug(f"  Skipping non-file entry: {full_path}")
                     except OSError as stat_error:
-                        logger.warning(f"  Could not stat file {full_path}, skipping: {stat_error}")
+                        logger.warning(
+                            f"  Could not stat file {full_path}, skipping: {stat_error}"
+                        )
 
     except OSError as e:
-        logger.error(f"OS error while walking directory {directory_path}: {e}", exc_info=True)
-        return []  # Return empty list on error
+        msg = f"OS error while walking directory {directory_path}: {e}"
+        logger.error(msg, exc_info=True)
+        raise ImageProcessingError(msg) from e
     except Exception as e:
-        logger.error(f"Unexpected error finding image files in {directory_path}: {e}", exc_info=True)
-        return []
+        msg = f"Unexpected error finding image files in {directory_path}: {e}"
+        logger.error(msg, exc_info=True)
+        raise ImageProcessingError(msg) from e
 
     if not image_files:
         logger.warning(
-            f"No image files with supported extensions found in {directory_path} (Scanned {files_scanned} files).")
+            f"No image files with supported extensions found in {directory_path} (Scanned {files_scanned} files)."
+        )
     else:
-        logger.info(f"Found {len(image_files)} potential image files (Scanned {files_scanned} total files).")
+        logger.info(
+            f"Found {len(image_files)} potential image files (Scanned {files_scanned} total files)."
+        )
 
     return image_files
 
 
 def load_image(
-        image_path: str, apply_orientation_correction: bool = True
+    image_path: str, apply_orientation_correction: bool = True
 ) -> Optional[Image.Image]:
     """
-    Loads an image from the given file path using Pillow. Handles common errors,
-    converts to RGB, and optionally corrects orientation.
+    Carga una imagen desde la ruta de archivo dada usando Pillow.
+
+    Maneja errores comunes, convierte a RGB y opcionalmente corrige la orientación.
 
     Args:
-        image_path: The full path to the image file.
-        apply_orientation_correction: If True, attempts to correct orientation based on EXIF.
+        image_path: La ruta completa al archivo de imagen.
+        apply_orientation_correction: Si es True, intenta corregir la orientación basada en EXIF.
 
     Returns:
-        A PIL Image object in RGB format, or None if loading fails.
+        Un objeto PIL Image en formato RGB, o None si la carga falla.
+        Logs de advertencia o error si la carga falla.
     """
     if not isinstance(image_path, str) or not image_path:
-        logger.warning("Invalid image path provided to load_image (empty or not a string).")
+        logger.warning(
+            "Invalid image path provided to load_image (empty or not a string)."
+        )
         return None
 
-    # Check if file exists *before* trying to open, providing a clearer error message
     if not os.path.isfile(image_path):
         logger.warning(f"Image file does not exist or is not a file: {image_path}")
         return None
 
     try:
-        # Open the image
         img = Image.open(image_path)
 
-        # 1. Apply orientation correction (optional)
         if apply_orientation_correction:
-            img = correct_image_orientation(img)  # Uses the improved helper
+            img = correct_image_orientation(img)
 
-        # 2. Convert to RGB if necessary (common requirement for models)
         if img.mode != "RGB":
-            # Log the conversion attempt
-            logger.debug(f"Converting image '{os.path.basename(image_path)}' from mode {img.mode} to RGB.")
-            # Use ImageOps.pad to handle transparency with a white background if needed
-            # This is generally safer than manual pasting
-            if img.mode == 'RGBA' or (img.mode == 'P' and 'transparency' in img.info):
+            logger.debug(
+                f"Converting image '{os.path.basename(image_path)}' from mode {img.mode} to RGB."
+            )
+            if img.mode == "RGBA" or (img.mode == "P" and "transparency" in img.info):
                 try:
-                    # Create an RGB image with white background
                     background = Image.new("RGB", img.size, (255, 255, 255))
-                    # Paste the image onto the background using its alpha channel or transparency info
-                    background.paste(img, mask=img.split()[-1])  # Assumes alpha is the last channel
+                    background.paste(img, mask=img.split()[-1])
                     img = background
                     logger.debug(
-                        f"  Successfully converted transparent image {os.path.basename(image_path)} to RGB with white background.")
+                        f"  Successfully converted transparent image {os.path.basename(image_path)} to RGB with white background."
+                    )
                 except Exception as conversion_err:
                     logger.warning(
-                        f"  Could not handle transparency for {os.path.basename(image_path)} during RGB conversion, using direct convert: {conversion_err}")
-                    # Fallback to direct conversion if pasting fails
+                        f"  Could not handle transparency for {os.path.basename(image_path)} during RGB conversion, using direct convert: {conversion_err}"
+                    )
                     img = img.convert("RGB")
             else:
-                # For other modes (L, CMYK, etc.), direct conversion is usually sufficient
                 img = img.convert("RGB")
 
-        # If we got here, loading and conversion were successful
-        # logger.debug(f"Successfully loaded and processed image: {image_path}")
         return img
 
-    # --- Error Handling ---
     except FileNotFoundError:
-        # Should be caught by os.path.isfile, but include for robustness
-        logger.error(f"FileNotFoundError for image path (should have been caught earlier): {image_path}")
+        logger.error(
+            f"FileNotFoundError for image path (should have been caught earlier): {image_path}"
+        )
         return None
     except UnidentifiedImageError:
-        # Pillow couldn't identify the image format (corrupt or unsupported)
-        logger.warning(f"Cannot identify image file (possibly corrupt or unsupported format): {image_path}")
+        logger.warning(
+            f"Cannot identify image file (possibly corrupt or unsupported format): {image_path}"
+        )
         return None
     except (IOError, OSError) as e:
-        # Catch file read errors, permission issues, etc.
         logger.warning(f"I/O or OS error loading image {image_path}: {e}")
         return None
     except Exception as e:
-        # Catch any other unexpected errors during loading or processing
-        logger.error(f"Unexpected error loading or processing image {image_path}: {e}", exc_info=True)
+        logger.error(
+            f"Unexpected error loading or processing image {image_path}: {e}",
+            exc_info=True,
+        )
         return None
 
 
 def batch_load_images(image_paths: List[str]) -> Tuple[List[Image.Image], List[str]]:
     """
-    Loads a batch of images from a list of paths, skipping those that fail to load.
+    Carga un lote de imágenes desde una lista de rutas, omitiendo las que fallan al cargar.
 
     Args:
-        image_paths: A list of paths to image files.
+        image_paths: Una lista de rutas a archivos de imagen.
 
     Returns:
-        A tuple containing:
-        - A list of successfully loaded PIL Image objects (RGB, orientation corrected).
-        - A list of the corresponding paths for the successfully loaded images.
+        Una tupla que contiene:
+        - Una lista de objetos PIL Image cargados con éxito (RGB, orientación corregida).
+        - Una lista de las rutas correspondientes para las imágenes cargadas con éxito.
+
+    Raises:
+        TypeError: Si image_paths no es una lista.
     """
     loaded_images: List[Image.Image] = []
     corresponding_paths: List[str] = []
 
     if not isinstance(image_paths, list):
-        logger.error("batch_load_images expects a list of paths, received non-list input.")
-        return [], []
+        raise TypeError(
+            "batch_load_images expects a list of paths, received non-list input."
+        )
     if not image_paths:
         logger.debug("batch_load_images received an empty list of paths.")
         return [], []
@@ -210,23 +218,22 @@ def batch_load_images(image_paths: List[str]) -> Tuple[List[Image.Image], List[s
     num_requested = len(image_paths)
     logger.info(f"Attempting to load a batch of {num_requested} images...")
 
-    # Iterate and attempt to load each image
     for path in image_paths:
-        # load_image handles its own logging for failures
         img = load_image(path)
         if img is not None:
-            # Append successful loads and their paths
             loaded_images.append(img)
             corresponding_paths.append(path)
-        # No else needed, load_image already logged the failure
 
     num_loaded = len(loaded_images)
     num_failed = num_requested - num_loaded
 
     if num_failed == 0:
-        logger.info(f"Batch loading finished. Successfully loaded all {num_loaded}/{num_requested} images.")
+        logger.info(
+            f"Batch loading finished. Successfully loaded all {num_loaded}/{num_requested} images."
+        )
     else:
         logger.warning(
-            f"Batch loading finished. Successfully loaded: {num_loaded}/{num_requested}. Failed: {num_failed}. Check previous logs for specific file errors.")
+            f"Batch loading finished. Successfully loaded: {num_loaded}/{num_requested}. Failed: {num_failed}. Check previous logs for specific file errors."
+        )
 
     return loaded_images, corresponding_paths
