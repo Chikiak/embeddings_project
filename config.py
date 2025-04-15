@@ -1,49 +1,70 @@
-﻿import os
+﻿# --- config.py ---
+import os
 from typing import List, Optional, Tuple
 
 from dotenv import load_dotenv
 
+# Carga variables de entorno desde .env
 load_dotenv()
 
-
+# --- Model Configuration ---
+# Lista de modelos disponibles (puedes añadir más aquí)
 AVAILABLE_MODELS: List[str] = [
-    "jinaai/jina-clip-v2",
+    "jinaai/jina-clip-v2"
 ]
 
-
+# Modelo por defecto a usar (puede ser sobreescrito por .env)
 DEFAULT_MODEL_NAME: str = os.getenv("APP_MODEL_NAME", AVAILABLE_MODELS[0])
-MODEL_NAME: str = DEFAULT_MODEL_NAME
+# Asegura que el modelo por defecto esté disponible
+MODEL_NAME: str = DEFAULT_MODEL_NAME if DEFAULT_MODEL_NAME in AVAILABLE_MODELS else AVAILABLE_MODELS[0]
 
+# Dispositivo para inferencia ('cuda' si hay GPU disponible y deseado, sino 'cpu')
 DEVICE: str = os.getenv("APP_DEVICE", "cpu")
+# Confiar en código remoto (¡PRECAUCIÓN!)
+# Cambiado a False por defecto por seguridad. Poner a True solo si confías en el repo del modelo.
 TRUST_REMOTE_CODE: bool = (
     os.getenv("APP_TRUST_REMOTE_CODE", "True").lower() == "true"
 )
 
-
-IMAGE_EXTENSIONS_STR: str = os.getenv(
-    "APP_IMAGE_EXTENSIONS", ".jpg,.jpeg,.png,.webp,.bmp"
-)
-IMAGE_EXTENSIONS: Tuple[str, ...] = tuple(
-    ext.strip().lower() for ext in IMAGE_EXTENSIONS_STR.split(",")
-)
+# --- Image Processing Configuration ---
+# Extensiones de imagen soportadas (definidas directamente)
+IMAGE_EXTENSIONS: Tuple[str, ...] = (".jpg", ".jpeg", ".png", ".webp", ".bmp", ".gif")
+# Tamaño de lote para procesar imágenes durante la indexación
 BATCH_SIZE_IMAGES: int = int(os.getenv("APP_BATCH_SIZE_IMAGES", "16"))
+# Directorio por defecto para buscar imágenes
 DEFAULT_IMAGE_DIR: str = os.getenv("APP_DEFAULT_IMAGE_DIR", "images")
 
-
+# --- Text Processing Configuration ---
+# Tamaño de lote para procesar texto
 BATCH_SIZE_TEXT: int = int(os.getenv("APP_BATCH_SIZE_TEXT", "32"))
 
-
+# --- Database Configuration ---
+# Ruta para almacenar la base de datos vectorial persistente
 CHROMA_DB_PATH: str = os.getenv("APP_CHROMA_DB_PATH", "vector_db_store/")
-CHROMA_COLLECTION_NAME: str = os.getenv(
-    "APP_CHROMA_COLLECTION_NAME", "image_embeddings_default"
+# Nombre base para las colecciones en ChromaDB (se añadirán sufijos _dimXXX o _full)
+CHROMA_COLLECTION_NAME_BASE: str = os.getenv(
+    "APP_CHROMA_COLLECTION_NAME_BASE", "image_embeddings"
 )
-VECTOR_DIMENSION_STR: str = os.getenv("APP_VECTOR_DIMENSION", "")
+# Dimensión objetivo para los vectores (None o 0 para usar la nativa del modelo)
+VECTOR_DIMENSION_STR: str = os.getenv("APP_VECTOR_DIMENSION", "0") # Default 0 para nativa
 VECTOR_DIMENSION: Optional[int] = (
-    int(VECTOR_DIMENSION_STR) if VECTOR_DIMENSION_STR.isdigit() else None
+    int(VECTOR_DIMENSION_STR) if VECTOR_DIMENSION_STR.isdigit() and int(VECTOR_DIMENSION_STR) > 0 else None
 )
 
+# --- Search Configuration ---
+# Número por defecto de resultados a devolver en búsquedas
+DEFAULT_N_RESULTS: int = int(os.getenv("APP_DEFAULT_N_RESULTS", "12"))
 
-DEFAULT_N_RESULTS: int = int(os.getenv("APP_DEFAULT_N_RESULTS", "10"))
-
-
+# --- Logging Configuration ---
+# Nivel de logging (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 LOG_LEVEL: str = os.getenv("APP_LOG_LEVEL", "INFO").upper()
+
+# --- Validation (Optional but Recommended) ---
+if MODEL_NAME not in AVAILABLE_MODELS:
+    raise ValueError(f"Model '{MODEL_NAME}' not found in AVAILABLE_MODELS list in config.py")
+if LOG_LEVEL not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
+     print(f"Warning: Invalid LOG_LEVEL '{LOG_LEVEL}' in config/env. Defaulting to INFO.")
+     LOG_LEVEL = "INFO"
+if DEVICE not in ["cpu", "cuda"]:
+    print(f"Warning: Invalid DEVICE '{DEVICE}' in config/env. Defaulting to 'cpu'.")
+    DEVICE = "cpu"
