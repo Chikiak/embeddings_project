@@ -5,14 +5,14 @@ from typing import Optional
 import streamlit as st
 
 import config
-from app import searching
+from app.services import searching
 from app.exceptions import PipelineError
-from app.models import SearchResults # Asegúrate de que SearchResults esté disponible
+from core.models import SearchResults # Asegúrate de que SearchResults esté disponible
 from core.vectorizer import Vectorizer
 from data_access.vector_db_interface import VectorDBInterface
 
 # Importa la función común para mostrar resultados
-from ..common import display_results
+from app.ui.common import display_results
 
 logger = logging.getLogger(__name__)
 

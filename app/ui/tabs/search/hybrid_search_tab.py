@@ -6,21 +6,21 @@ import streamlit as st
 import time
 
 import config
-from app import searching
+from app.services import searching
 from app.exceptions import PipelineError
-from app.models import SearchResults # Asegúrate de que SearchResults esté disponible
+from core.models import SearchResults # Asegúrate de que SearchResults esté disponible
 from core.vectorizer import Vectorizer
 from data_access.vector_db_interface import VectorDBInterface
 
 # Importaciones de UI comunes y widgets
-from ..common import display_results
-from ..state_utils import (
+from app.ui.common import display_results
+from app.ui.state_utils import (
     STATE_HYBRID_METHOD,
     STATE_UPLOADED_IMG_PATH_PREFIX,
     get_state_key,
-    reset_image_selection_states, # Usado por el widget de subida
+    # Usado por el widget de subida
 )
-from ..widgets import _display_query_image, _render_upload_widget
+from app.ui.widgets import _display_query_image, _render_upload_widget
 
 logger = logging.getLogger(__name__)
 

@@ -5,7 +5,7 @@ from typing import Optional
 import streamlit as st
 from PIL import Image, UnidentifiedImageError
 
-from app.models import SearchResultItem, SearchResults
+from core.models import SearchResults
 
 logger = logging.getLogger(__name__)
 

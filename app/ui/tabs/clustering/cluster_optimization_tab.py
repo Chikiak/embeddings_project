@@ -6,8 +6,8 @@ from typing import Optional
 import numpy as np
 import streamlit as st
 
-from app import clustering
-from app.exceptions import DatabaseError, InitializationError, PipelineError
+from app.services import clustering
+from app.exceptions import DatabaseError, PipelineError
 from app.ui.state_utils import (
     STATE_CLUSTER_IDS, # Para limpiar si se optimiza
     STATE_CLUSTER_LABELS, # Para limpiar si se optimiza

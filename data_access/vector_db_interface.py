@@ -4,7 +4,7 @@ from typing import Any, Dict, List, Optional, Tuple, Union
 import numpy as np
 
 try:
-    from app.models import SearchResults
+    from core.models import SearchResults
 except ImportError:
 
     class SearchResults:

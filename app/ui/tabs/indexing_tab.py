@@ -5,10 +5,9 @@ import time
 from typing import Optional
 
 import streamlit as st
-from PIL import Image # Mantenido por si se usa en el futuro
 
 import config
-from app import indexing
+from ...services import indexing
 from app.exceptions import DatabaseError, PipelineError
 from core.image_processor import find_image_files
 from core.vectorizer import Vectorizer

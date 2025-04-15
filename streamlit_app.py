@@ -2,7 +2,7 @@
 import logging
 import os
 import sys
-from typing import Optional, Union
+from typing import Optional
 
 import streamlit as st
 import torch
@@ -23,7 +23,7 @@ try:
     import config # Importa config actualizado
     from app.exceptions import InitializationError
     # Importa funciones refactorizadas de factory
-    from app.factory import create_vectorizer, get_or_create_db_for_model_and_dim
+    from core.factory import create_vectorizer, get_or_create_db_for_model_and_dim
     from app.logging_config import setup_logging
     from app.ui.sidebar import display_database_info
     from app.ui.state_utils import (
@@ -35,10 +35,10 @@ try:
     from app.ui.tabs.clustering.cluster_execution_tab import render_cluster_execution_tab
     from app.ui.tabs.clustering.cluster_optimization_tab import render_cluster_optimization_tab
     from app.ui.tabs.clustering.cluster_visualization_tab import render_cluster_visualization_tab
-    from app.ui.tabs.hybrid_search_tab import render_hybrid_search_tab
-    from app.ui.tabs.image_search_tab import render_image_search_tab
+    from app.ui.tabs.search.hybrid_search_tab import render_hybrid_search_tab
+    from app.ui.tabs.search.image_search_tab import render_image_search_tab
     from app.ui.tabs.indexing_tab import render_indexing_tab
-    from app.ui.tabs.text_search_tab import render_text_search_tab
+    from app.ui.tabs.search.text_search_tab import render_text_search_tab
     # Importaciones del núcleo y acceso a datos
     from core.vectorizer import Vectorizer
     from data_access.vector_db_interface import VectorDBInterface

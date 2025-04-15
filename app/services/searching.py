@@ -11,7 +11,7 @@ from app.exceptions import (
     PipelineError,
     VectorizerError,
 )
-from app.models import SearchResultItem, SearchResults
+from core.models import SearchResultItem, SearchResults
 from core.image_processor import load_image
 from core.vectorizer import Vectorizer
 from data_access.vector_db_interface import VectorDBInterface

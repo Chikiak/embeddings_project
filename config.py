@@ -11,6 +11,8 @@ load_dotenv()
 # Lista de modelos disponibles (puedes añadir más aquí)
 AVAILABLE_MODELS: List[str] = [
     "jinaai/jina-clip-v2"
+    # "openai/clip-vit-base-patch32", # Ejemplo si añades más
+    # "openai/clip-vit-large-patch14"
 ]
 
 # Modelo por defecto a usar (puede ser sobreescrito por .env)
@@ -20,8 +22,6 @@ MODEL_NAME: str = DEFAULT_MODEL_NAME if DEFAULT_MODEL_NAME in AVAILABLE_MODELS e
 
 # Dispositivo para inferencia ('cuda' si hay GPU disponible y deseado, sino 'cpu')
 DEVICE: str = os.getenv("APP_DEVICE", "cpu")
-# Confiar en código remoto (¡PRECAUCIÓN!)
-# Cambiado a False por defecto por seguridad. Poner a True solo si confías en el repo del modelo.
 TRUST_REMOTE_CODE: bool = (
     os.getenv("APP_TRUST_REMOTE_CODE", "True").lower() == "true"
 )
@@ -41,10 +41,15 @@ BATCH_SIZE_TEXT: int = int(os.getenv("APP_BATCH_SIZE_TEXT", "32"))
 # --- Database Configuration ---
 # Ruta para almacenar la base de datos vectorial persistente
 CHROMA_DB_PATH: str = os.getenv("APP_CHROMA_DB_PATH", "vector_db_store/")
-# Nombre base para las colecciones en ChromaDB (se añadirán sufijos _dimXXX o _full)
+# Nombre base para las colecciones de BD de IMAGEN (se añadirán sufijos _dimXXX o _full)
 CHROMA_COLLECTION_NAME_BASE: str = os.getenv(
     "APP_CHROMA_COLLECTION_NAME_BASE", "image_embeddings"
 )
+# Nombre base para las colecciones de BD de TEXTO (se añadirán sufijos) - NUEVO
+TEXT_DB_COLLECTION_NAME_BASE: str = os.getenv(
+    "APP_TEXT_DB_COLLECTION_NAME_BASE", "text_labels"
+)
+
 # Dimensión objetivo para los vectores (None o 0 para usar la nativa del modelo)
 VECTOR_DIMENSION_STR: str = os.getenv("APP_VECTOR_DIMENSION", "0") # Default 0 para nativa
 VECTOR_DIMENSION: Optional[int] = (
@@ -61,7 +66,11 @@ LOG_LEVEL: str = os.getenv("APP_LOG_LEVEL", "INFO").upper()
 
 # --- Validation (Optional but Recommended) ---
 if MODEL_NAME not in AVAILABLE_MODELS:
-    raise ValueError(f"Model '{MODEL_NAME}' not found in AVAILABLE_MODELS list in config.py")
+    # Usar print o logger aquí podría ser problemático si el logger aún no está configurado
+    print(f"ERROR: Model '{MODEL_NAME}' not found in AVAILABLE_MODELS list in config.py. Available: {AVAILABLE_MODELS}")
+    MODEL_NAME = AVAILABLE_MODELS[0] # Fallback al primero
+    print(f"Warning: Falling back to default model: {MODEL_NAME}")
+
 if LOG_LEVEL not in ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]:
      print(f"Warning: Invalid LOG_LEVEL '{LOG_LEVEL}' in config/env. Defaulting to INFO.")
      LOG_LEVEL = "INFO"

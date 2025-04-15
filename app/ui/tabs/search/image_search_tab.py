@@ -6,22 +6,22 @@ from typing import Optional
 import streamlit as st
 
 import config
-from app import searching
+from app.services import searching
 from app.exceptions import PipelineError
-from app.models import SearchResults # Asegúrate de que SearchResults esté disponible
+from core.models import SearchResults # Asegúrate de que SearchResults esté disponible
 from core.vectorizer import Vectorizer
 from data_access.vector_db_interface import VectorDBInterface
 
 # Importaciones de UI comunes y widgets
-from ..common import display_results
-from ..state_utils import (
+from app.ui.common import display_results
+from app.ui.state_utils import (
     STATE_SELECTED_INDEXED_IMG_PREFIX,
     STATE_TRIGGER_SEARCH_FLAG_PREFIX,
     STATE_UPLOADED_IMG_PATH_PREFIX,
     get_state_key,
     reset_image_selection_states,
 )
-from ..widgets import (
+from app.ui.widgets import (
     _display_query_image,
     _render_indexed_selection,
     _render_upload_widget,

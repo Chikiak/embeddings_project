@@ -1,18 +1,16 @@
-﻿# --- app/factory.py ---
-import logging
+﻿import logging
 import time
-from typing import Optional, Tuple, Union, Dict
+from typing import Optional, Tuple, Union, Dict, Any # Añadir Any
 
-import config # Importa la configuración actualizada
+import config
 from app.exceptions import InitializationError
 from core.vectorizer import Vectorizer
-from data_access.chroma_db import ChromaVectorDB # Importa la implementación concreta
+from data_access.chroma_db import ChromaVectorDB
 from data_access.vector_db_interface import VectorDBInterface
 
 logger = logging.getLogger(__name__)
 
-# Cachés simples en memoria (alternativa a st.cache_resource para uso fuera de Streamlit)
-# Nota: Estos cachés son por proceso. En un entorno multi-proceso/servidor, se necesitaría un caché externo.
+# Cachés simples en memoria
 _vectorizer_cache: Dict[str, Vectorizer] = {}
 _db_cache: Dict[str, VectorDBInterface] = {}
 
@@ -47,18 +45,16 @@ def create_vectorizer(
 def create_vector_database(
     collection_name: str,
     expected_dimension_metadata: Optional[Union[int, str]],
+    # --- NUEVO: Parámetro opcional para metadatos de creación ---
+    creation_metadata: Optional[Dict[str, Any]] = None,
 ) -> VectorDBInterface:
     """
-    Crea o recupera desde caché una instancia de VectorDatabase (ChromaDB) para una colección específica.
+    Crea o recupera desde caché una instancia de VectorDatabase (ChromaDB).
 
     Args:
         collection_name: Nombre deseado para la colección.
         expected_dimension_metadata: Dimensión esperada (int o 'full') para metadatos.
-
-    Returns:
-        Instancia inicializada de VectorDBInterface.
-    Raises:
-        InitializationError si falla la inicialización.
+        creation_metadata: Metadatos adicionales a usar al *crear* la colección (ej: {"hnsw:space": "cosine"}).
     """
     # La clave de caché incluye la ruta (implícita en config) y el nombre de la colección
     cache_key = f"{config.CHROMA_DB_PATH}_{collection_name}"
@@ -67,26 +63,29 @@ def create_vector_database(
         cached_db = _db_cache[cache_key]
         if cached_db.is_initialized:
              logger.debug(f"Returning cached DB instance for collection: '{collection_name}'")
-             # Opcional: Verificar si expected_dimension_metadata coincide con el cacheado o el real?
-             # Por simplicidad, asumimos que si está en caché y inicializado, está bien.
+             # Opcional: Podrías añadir una verificación aquí si los creation_metadata solicitados
+             # difieren de los que tiene la colección cacheada, aunque puede ser complejo.
              return cached_db
         else:
              logger.warning(f"Cached DB instance for '{collection_name}' is no longer initialized. Removing from cache.")
              del _db_cache[cache_key]
 
     logger.info(f"Creating/Getting new DB instance for collection: '{collection_name}' (Expected Dim Meta: {expected_dimension_metadata})...")
+    if creation_metadata:
+         logger.info(f"  Will use creation metadata if collection is new: {creation_metadata}")
+
     try:
         # Siempre usa la implementación ChromaVectorDB
         db_instance = ChromaVectorDB(
             path=config.CHROMA_DB_PATH,
             collection_name=collection_name,
             expected_dimension_metadata=expected_dimension_metadata,
+            # --- PASAR: Pasa los metadatos de creación al constructor ---
+            creation_metadata=creation_metadata,
         )
 
-        # is_initialized ya se verifica dentro del constructor de ChromaVectorDB (o debería)
-        # Si el constructor no lanzó error, asumimos que está lista o is_initialized lo reflejará.
+        # is_initialized ya se verifica dentro del constructor de ChromaVectorDB
         if not db_instance.is_initialized:
-            # Intenta obtener el último error si está disponible
             last_err = getattr(db_instance, "_last_init_error", "Unknown initialization issue")
             raise InitializationError(f"DB instance created but failed initialization check for '{collection_name}'. Last error: {last_err}")
 
@@ -106,7 +105,7 @@ def get_or_create_db_for_model_and_dim(
     truncate_dim: Optional[int]
 ) -> VectorDBInterface:
     """
-    Obtiene la instancia de BD correcta basada en el modelo y la dimensión de truncamiento.
+    Obtiene la instancia de BD de *imágenes* correcta basada en el modelo y la dimensión de truncamiento.
     Determina el nombre de la colección y los metadatos esperados.
 
     Args:
@@ -114,7 +113,7 @@ def get_or_create_db_for_model_and_dim(
         truncate_dim: La dimensión de truncamiento deseada (None para nativa).
 
     Returns:
-        La instancia de VectorDBInterface correcta.
+        La instancia de VectorDBInterface correcta para imágenes.
 
     Raises:
         InitializationError: Si no se puede obtener la instancia de BD.
@@ -132,17 +131,61 @@ def get_or_create_db_for_model_and_dim(
     if is_truncated:
         effective_target_dimension = truncate_dim
         dimension_suffix = f"_dim{truncate_dim}"
-        logger.debug(f"Targeting truncated dimension: {truncate_dim}")
+        logger.debug(f"Targeting truncated dimension for IMAGE DB: {truncate_dim}")
     else:
         effective_target_dimension = "full" # Usar 'full' como metadato para dimensión nativa
         dimension_suffix = "_full"
         if truncate_dim is not None and truncate_dim != 0:
-             logger.warning(f"Requested dimension {truncate_dim} is invalid or >= native {native_dim}. Using full dimension.")
-        logger.debug(f"Targeting full native dimension: {native_dim}")
+             logger.warning(f"Requested dimension {truncate_dim} is invalid or >= native {native_dim}. Using full dimension for IMAGE DB.")
+        logger.debug(f"Targeting full native dimension for IMAGE DB: {native_dim}")
 
-    # Construye el nombre final de la colección
+    # Construye el nombre final de la colección de imágenes
     target_collection_name = f"{base_collection_name}_{model_suffix}{dimension_suffix}"
-    logger.info(f"Determined target collection name: '{target_collection_name}' (Expected Dim Meta: {effective_target_dimension})")
+    logger.info(f"Determined target IMAGE collection name: '{target_collection_name}' (Expected Dim Meta: {effective_target_dimension})")
 
-    # Llama a create_vector_database para obtener/crear/cachear la instancia
+    # Llama a create_vector_database para obtener/crear/cachear la instancia de imágenes
+    # No pasa creation_metadata extra aquí, solo la dimensión esperada
     return create_vector_database(target_collection_name, effective_target_dimension)
+
+
+# --- NUEVA FUNCIÓN: Para obtener/crear la BD de TEXTO ---
+def get_or_create_text_db(
+    vectorizer: Vectorizer,
+    truncate_dim: Optional[int]
+) -> VectorDBInterface:
+    """
+    Obtiene o crea la instancia de BD de *texto* correcta para el etiquetado,
+    asegurando que use la métrica 'cosine'.
+    """
+    base_collection_name = config.TEXT_DB_COLLECTION_NAME_BASE # Usar la nueva config
+    model_suffix = vectorizer.model_name.split('/')[-1].replace('-', '_')
+
+    native_dim = vectorizer.native_dimension
+    if not native_dim:
+        raise ValueError(f"Cannot determine native dimension for vectorizer '{vectorizer.model_name}'.")
+
+    is_truncated = truncate_dim is not None and 0 < truncate_dim < native_dim
+    if is_truncated:
+        effective_target_dimension = truncate_dim
+        dimension_suffix = f"_dim{truncate_dim}"
+        logger.debug(f"Targeting truncated dimension for TEXT DB: {truncate_dim}")
+    else:
+        effective_target_dimension = "full"
+        dimension_suffix = "_full"
+        logger.debug(f"Targeting full native dimension for TEXT DB: {native_dim}")
+
+
+    target_collection_name = f"{base_collection_name}_{model_suffix}{dimension_suffix}"
+    logger.info(f"Determined target TEXT collection name: '{target_collection_name}' (Expected Dim Meta: {effective_target_dimension})")
+
+    # --- Metadatos específicos para la colección de texto ---
+    text_db_creation_metadata = {"hnsw:space": "cosine"}
+
+    # Llama a create_vector_database pasando los metadatos de creación
+    # Usa la misma dimensión esperada (effective_target_dimension) para la clave DIMENSION_METADATA_KEY
+    return create_vector_database(
+        collection_name=target_collection_name,
+        expected_dimension_metadata=effective_target_dimension,
+        creation_metadata=text_db_creation_metadata # Pasa hnsw:space
+    )
+# --- Fin app/factory.py ---
